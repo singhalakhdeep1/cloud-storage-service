@@ -1,57 +1,44 @@
 # Cloud Storage Service
 
-![Node.js](https://img.shields.io/badge/Node.js-18.x-green)
-![Express](https://img.shields.io/badge/Express-4.18-white)
-![AWS S3](https://img.shields.io/badge/AWS_S3-orange)
-![Multer](https://img.shields.io/badge/Multer-1.4-blue)
-![License](https://img.shields.io/badge/License-MIT-blue)
+A file upload and cloud storage service with AWS S3 integration, image processing, streaming capabilities, and security features.
 
-A production-ready file upload and cloud storage service with AWS S3 integration, image processing, streaming capabilities, and enterprise-grade security features.
+## Overview
 
-## 📋 Overview
+This service handles secure file uploads, storage, and retrieval with support for multiple cloud providers. Built with Node.js, Express, and AWS S3, implementing streaming for large files, image optimization, and secure file sharing.
 
-The Cloud Storage Service is a comprehensive file management solution designed to handle secure file uploads, storage, and retrieval with support for multiple cloud providers. Built with Node.js, Express, and AWS S3, this service implements streaming for large files, image optimization, and secure file sharing.
+## Features
 
-## ✨ Features
+- Single and multiple file uploads
+- AWS S3 integration with compatible services
+- Streaming uploads for large files
+- Image processing (resizing, compression, format conversion)
+- File validation for type, size, and dimensions
+- Presigned URLs for secure file access
+- Multi-cloud support (AWS S3, DigitalOcean Spaces, MinIO)
+- Automatic thumbnail generation
+- Client-side encryption for sensitive files
+- CDN integration (CloudFront/Cloudflare)
+- File versioning
+- Resumable chunked uploads
+- Access control policies
+- Virus scanning with ClamAV
+- Rate limiting
+- Gzip compression
+- Intelligent caching
 
-### Core Functionality
-- **Single & Multiple Uploads**: Handle single and batch file uploads efficiently
-- **AWS S3 Integration**: Seamless integration with AWS S3 and compatible services
-- **Streaming Uploads**: Stream large files directly to cloud storage
-- **Image Processing**: Automatic image resizing, compression, and format conversion
-- **File Validation**: Comprehensive validation for file type, size, and dimensions
-- **Presigned URLs**: Generate secure, time-limited URLs for file access
+## Tech Stack
 
-### Advanced Features
-- **Multi-Cloud Support**: AWS S3, DigitalOcean Spaces, MinIO compatibility
-- **Image Optimization**: Automatic thumbnail generation and compression
-- **File Encryption**: Client-side encryption for sensitive files
-- **CDN Integration**: CloudFront/Cloudflare CDN support
-- **File Versioning**: Track and manage file versions
-- **Chunked Uploads**: Resumable uploads for large files
+- Node.js 18.x
+- Express.js 4.18.x
+- AWS SDK 3.x
+- Multer 1.4.x
+- Sharp 0.33.x
+- Busboy 1.0.x
+- ClamAV 1.0.x
+- Redis 7.x
+- Winston 3.10.x
 
-### Security & Performance
-- **Access Control**: Bucket-level and object-level access policies
-- **Virus Scanning**: Integration with ClamAV for malware detection
-- **Rate Limiting**: Configurable upload rate limits
-- **Compression**: Gzip compression for faster transfers
-- **Caching**: Intelligent caching strategies for frequently accessed files
-
-## 🛠️ Tech Stack
-
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| Node.js | 18.x | Runtime environment |
-| Express.js | 4.18.x | Web framework |
-| AWS SDK | 3.x | AWS S3 integration |
-| Multer | 1.4.x | File upload handling |
-| Sharp | 0.33.x | Image processing |
-| Busboy | 1.0.x | Streaming file uploads |
-| ClamAV | 1.0.x | Virus scanning |
-| Redis | 7.x | Caching layer |
-| Winston | 3.10.x | Logging |
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 cloud-storage-service/
@@ -88,7 +75,7 @@ cloud-storage-service/
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -146,7 +133,7 @@ npm test
 
 ---
 
-## 📡 API Endpoints
+## API Endpoints
 
 ### File Upload
 
@@ -187,7 +174,7 @@ npm test
 
 ---
 
-## 🔐 Security Features
+## Security Features
 
 ### Upload Security
 - **File Type Validation**: Strict MIME type checking
@@ -211,7 +198,7 @@ npm test
 
 ---
 
-## 📊 Database Schema
+## Database Schema
 
 ### File Model
 ```javascript
@@ -265,7 +252,7 @@ npm test
 
 ---
 
-## 🧪 Testing
+## Testing
 
 The project includes comprehensive test suites:
 
@@ -282,7 +269,7 @@ npm test -- --coverage
 
 ---
 
-## 📈 Monitoring & Logging
+## Monitoring & Logging
 
 ### Winston Logger Configuration
 - **Console**: Colored output for development
@@ -300,7 +287,7 @@ npm test -- --coverage
 
 ---
 
-## 🚀 Deployment
+## Deployment
 
 ### Environment Variables for Production
 
@@ -329,7 +316,7 @@ CDN_URL=https://your-cdn-domain.com
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow these steps:
 
@@ -341,13 +328,13 @@ Contributions are welcome! Please follow these steps:
 
 ---
 
-## 📝 License
+## License
 
 Proprietary - All rights reserved.
 
 ---
 
-## 👨‍💻 Author
+## Author
 
 **Alakhdeep Singh**
 
@@ -356,9 +343,6 @@ Proprietary - All rights reserved.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
-- Built following AWS S3 best practices
-- Image processing powered by Sharp library
-- Security patterns from OWASP guidelines
-- Inspired by industry-standard file storage services
+Built following AWS S3 best practices and security guidelines.

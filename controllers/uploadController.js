@@ -114,6 +114,11 @@ exports.completeChunkedUpload = asyncHandler(async (req, res, next) => {
         return next(new AppError('Not authorized', 403));
     }
 
+    const user = await User.findById(req.user._id);
+    if (!user) {
+        return next(new AppError('User not found', 404));
+    }
+
     if (!session.isComplete()) {
         return next(new AppError('Not all chunks uploaded', 400));
     }

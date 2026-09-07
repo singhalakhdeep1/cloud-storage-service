@@ -1,10 +1,18 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
+jest.mock('../config/s3', () => ({
+    uploadToS3: jest.fn(),
+    getFromS3: jest.fn(),
+    deleteFromS3: jest.fn(),
+    getPresignedUrl: jest.fn(),
+    getPresignedUploadUrl: jest.fn()
+}));
 const app = require('../server');
 const User = require('../models/User');
 const UploadSession = require('../models/UploadSession');
 const File = require('../models/File');
 const { generateToken } = require('../middleware/auth');
+const s3 = require('../config/s3');
 
 describe('Upload API Tests', () => {
     let token;
@@ -33,6 +41,13 @@ describe('Upload API Tests', () => {
         await UploadSession.deleteMany({});
         await File.deleteMany({});
         await mongoose.connection.close();
+    });
+
+    beforeEach(() => {
+        jest.resetAllMocks();
+        s3.uploadToS3.mockResolvedValue({ key: 'test-key', location: 'https://storage.test/test-key', bucket: 'test-bucket' });
+        s3.getFromS3.mockResolvedValue({ Body: Buffer.from('chunk') });
+        s3.deleteFromS3.mockResolvedValue(undefined);
     });
 
     afterEach(async () => {
@@ -161,14 +176,16 @@ describe('Upload API Tests', () => {
             uploadId = session.uploadId;
         });
 
-        it('should complete chunked upload successfully (mock)', async () => {
-            // This test would need mocking of S3 operations
+        it('should complete chunked upload successfully', async () => {
             const res = await request(app)
                 .post(`/api/upload/chunked/${uploadId}/complete`)
                 .set('Authorization', `Bearer ${token}`);
 
-            // Will likely fail without S3 mocking, but structure is correct
-            expect(res.statusCode).toBeDefined();
+            expect(res.statusCode).toBe(200);
+            expect(res.body.success).toBe(true);
+            expect(s3.getFromS3).toHaveBeenCalledTimes(2);
+            expect(s3.uploadToS3).toHaveBeenCalledTimes(1);
+            expect(s3.deleteFromS3).toHaveBeenCalledTimes(2);
         });
 
         it('should fail if not all chunks uploaded', async () => {

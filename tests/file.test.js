@@ -1,9 +1,17 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
+jest.mock('../config/s3', () => ({
+    uploadToS3: jest.fn(),
+    getFromS3: jest.fn(),
+    deleteFromS3: jest.fn(),
+    getPresignedUrl: jest.fn(),
+    getPresignedUploadUrl: jest.fn()
+}));
 const app = require('../server');
 const User = require('../models/User');
 const File = require('../models/File');
 const { generateToken } = require('../middleware/auth');
+const s3 = require('../config/s3');
 
 describe('File Management API Tests', () => {
     let token;
@@ -32,6 +40,13 @@ describe('File Management API Tests', () => {
         await User.deleteMany({});
         await File.deleteMany({});
         await mongoose.connection.close();
+    });
+
+    beforeEach(() => {
+        jest.resetAllMocks();
+        s3.getPresignedUrl.mockResolvedValue('https://storage.test/download');
+        s3.getPresignedUploadUrl.mockResolvedValue('https://storage.test/upload');
+        s3.deleteFromS3.mockResolvedValue(undefined);
     });
 
     afterEach(async () => {
@@ -222,7 +237,7 @@ describe('File Management API Tests', () => {
 
             expect(res.statusCode).toBe(200);
             expect(res.body.success).toBe(true);
-            expect(res.body.data).toHaveProperty('url');
+            expect(res.body).toHaveProperty('url', 'https://storage.test/download');
         });
 
         it('should increment download count', async () => {
@@ -302,8 +317,8 @@ describe('File Management API Tests', () => {
                     size: 1024000
                 });
 
-            // This test would need S3 mocking
-            expect(res.statusCode).toBeDefined();
+            expect(res.statusCode).toBe(200);
+            expect(res.body).toHaveProperty('url', 'https://storage.test/upload');
         });
 
         it('should fail without required fields', async () => {

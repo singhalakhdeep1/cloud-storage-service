@@ -36,3 +36,7 @@ build/
 
 # Uploads
 uploads/
+
+# Next.js build output
+.next/
+*.tsbuildinfo

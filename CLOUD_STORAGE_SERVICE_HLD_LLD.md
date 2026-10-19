@@ -1,16 +1,16 @@
 # Cloud Storage Service - HLD/LLD Implementation
 
 ## Overview
-This document provides comprehensive documentation for HLD/LLD patterns implemented in the Cloud Storage Service application (Node.js/Express).
+This document provides comprehensive documentation for HLD/LLD patterns implemented in the Cloud Storage Service application (Node.js/Express, TypeScript). Every topic below is implemented and was verified against real Redis, MongoDB and object stores; see README.md.
 
 ## Implemented Topics
 
 ### LLD Topics (Low-Level Design)
 
 #### 1. Distributed Caching
-**Location:** `services/cache/cache.service.js`
+**Location:** `services/cache/cache.service.ts`
 
-**Description:** Implements distributed caching with Redis for cloud storage platform data.
+**Description:** Implements distributed caching with Redis for cloud storage platform data (bounded in-process fallback when Redis is not configured; a cache failure never fails a request). Used for analytics responses, token revocation, share-link attempt limits and the janitor lock.
 
 **Key Features:**
 - Get/set/delete operations
@@ -19,18 +19,18 @@ This document provides comprehensive documentation for HLD/LLD patterns implemen
 - Pattern-based invalidation
 
 **Usage Example:**
-```javascript
-const CacheService = require('./services/cache/cache.service');
+```typescript
+import { CacheService } from './services/cache/cache.service';
 
-const cache = new CacheService();
+const cache = new CacheService('files');
 const cached = await cache.get('file:123');
 await cache.set('file:123', JSON.stringify(file), 3600);
 ```
 
 #### 2. API Rate Limiting
-**Location:** `services/rate-limiting/rate-limiting.service.js`
+**Location:** `services/rate-limiting/rate-limiting.service.ts`
 
-**Description:** Implements token bucket algorithm for API rate limiting.
+**Description:** Implements token bucket algorithm for API rate limiting. On Redis the refill-and-take step is one Lua script, atomic across instances; `middleware/rateLimits.ts` applies it to the API, uploads, sign-in, registration, public links and heavy operations.
 
 **Key Features:**
 - Token bucket algorithm
@@ -39,17 +39,17 @@ await cache.set('file:123', JSON.stringify(file), 3600);
 - Redis-backed storage
 
 **Usage Example:**
-```javascript
-const RateLimitingService = require('./services/rate-limiting/rate-limiting.service');
+```typescript
+import RateLimitingService from './services/rate-limiting/rate-limiting.service';
 
 const rateLimiting = new RateLimitingService();
 const allowed = await rateLimiting.isAllowed(`user:${userId}`, 1);
 ```
 
 #### 3. Structured Logging
-**Location:** `services/structured-logging/structured-logging.service.js`
+**Location:** `services/structured-logging/structured-logging.service.ts`
 
-**Description:** Implements structured logging with correlation IDs and context.
+**Description:** Implements structured logging with correlation IDs and context (AsyncLocalStorage per request; the id comes from `X-Request-Id`, e.g. set by nginx, or is generated).
 
 **Key Features:**
 - Structured log entries
@@ -58,10 +58,9 @@ const allowed = await rateLimiting.isAllowed(`user:${userId}`, 1);
 - Audit event logging
 
 **Usage Example:**
-```javascript
-const StructuredLoggingService = require('./services/structured-logging/structured-logging.service');
+```typescript
+import { structuredLogger as logging } from './services/structured-logging/structured-logging.service';
 
-const logging = new StructuredLoggingService();
 logging.logAuditEvent('FileUploaded', 'User uploaded a file', { userId, fileId });
 ```
 
@@ -70,7 +69,7 @@ logging.logAuditEvent('FileUploaded', 'User uploaded a file', { userId, fileId }
 #### 1. Cloud Storage Controllers
 **Location:** `controllers/` (Already exists)
 
-**Description:** Controllers for file upload, download, and management operations.
+**Description:** Controllers for file upload, download, and management operations; `controllers/storage/*` holds one administration controller per provider (S3, MinIO, DigitalOcean Spaces, Backblaze B2, Wasabi, Cloudflare R2, GCS, Azure).
 
 #### 2. REST API
 **Location:** `routes/` (Already exists)
@@ -90,12 +89,12 @@ logging.logAuditEvent('FileUploaded', 'User uploaded a file', { userId, fileId }
 #### 5. Configuration
 **Location:** `config/` (Already exists)
 
-**Description:** Configuration for storage providers (S3, Azure, GCS).
+**Description:** Validated configuration (`config/env.ts`) for storage providers (local, S3 and S3-compatibles, Azure, GCS), Redis, ClamAV, CDN and secrets.
 
 #### 6. Nginx
 **Location:** `nginx.conf` (Already exists)
 
-**Description:** Nginx configuration for reverse proxy and load balancing.
+**Description:** Nginx configuration for reverse proxy and load balancing: three API instances (`least_conn`, failover), the web app, streamed uploads, body and request-rate limits. `docker-compose.yml` runs it with the whole stack.
 
 ## Architecture
 

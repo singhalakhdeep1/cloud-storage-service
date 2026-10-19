@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import type { Request } from 'express';
 import { Types } from 'mongoose';
 import cfg from '../config/env';
+import logger from '../config/logger';
 import File from '../models/File';
 import ShareLink from '../models/ShareLink';
 import User from '../models/User';
@@ -14,6 +15,7 @@ import AppError from '../utils/appError';
 import { randomToken, sha256 } from '../utils/crypto';
 import { CacheService } from './cache/cache.service';
 import * as activity from './activity.service';
+import { metrics } from './metrics.service';
 import * as fileService from './file.service';
 import * as objectStore from './objectStore.service';
 import * as webhooks from './webhook.service';
@@ -139,6 +141,8 @@ export async function describe(token: string, req?: Request): Promise<Record<str
         expiresAt: link.expiresAt,
         remainingDownloads: link.maxDownloads ? Math.max(0, link.maxDownloads - link.downloadCount) : undefined,
         hasPreview: Boolean(thumb),
+        // not secret: the visitor still needs the passphrase to decrypt
+        ...(file.clientEncryption ? { clientEncryption: file.clientEncryption } : {}),
     };
 }
 
@@ -158,7 +162,12 @@ export async function download(token: string, password: string | undefined, opti
         { $inc: { downloadCount: options.inline ? 0 : 1 }, $set: { lastAccessedAt: new Date() } }
     );
     if (!counted) throw new AppError('This link has reached its download limit', 410, 'link_exhausted');
-    await File.updateOne({ _id: file._id }, { $inc: { downloadCount: 1 }, $set: { lastAccessedAt: new Date() } });
+    // a preview through the link is not a download, for the file's counter either
+    await File.updateOne({ _id: file._id }, { $inc: { downloadCount: options.inline ? 0 : 1 }, $set: { lastAccessedAt: new Date() } });
+    if (!options.inline) {
+        metrics.download('link');
+        logger.download('File downloaded through a share link', { fileId: String(file._id), linkId: String(link._id) });
+    }
     activity.record(file._id, undefined, 'link_download', options.req, { linkId: String(link._id) });
     const expiresIn = 300;
     const url = await objectStore.contentUrl(fileService.refOf(file), { expiresIn, filename: file.originalName, inline: options.inline, fileId: String(file._id) });

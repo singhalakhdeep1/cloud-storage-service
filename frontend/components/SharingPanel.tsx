@@ -76,6 +76,7 @@ export default function SharingPanel({ file, onChanged }: { file: FileInfo; onCh
 
             <section aria-labelledby="share-links">
                 <h3 id="share-links" className="mb-2 font-semibold">Share with a link</h3>
+                {file.clientEncryption && <p className="mb-2 rounded-lg bg-emerald-50 p-2 text-sm text-emerald-900">🔐 End-to-end encrypted: people who open the link also need the passphrase. Send it to them separately (not in the same message as the link).</p>}
                 <p className="mb-2 text-sm text-slate-500">Anyone with the link can open the file without an account. Pick an expiry and a password for anything sensitive.</p>
                 <form className="grid grid-cols-2 gap-3 sm:grid-cols-4" onSubmit={(e) => { e.preventDefault(); void run(async () => { const l = await sdk.createLink(file._id, { expiresInHours: hours ? Number(hours) : undefined, password: password || undefined, maxDownloads: max ? Number(max) : undefined, permission: linkPerm }); setFresh({ url: l.url }); setPassword(''); }, 'Link created'); }}>
                     <Field label="Expires after (hours)"><input className="input" type="number" min={1} max={8760} value={hours} onChange={(e) => setHours(e.target.value)} placeholder="never" /></Field>

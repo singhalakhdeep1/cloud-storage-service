@@ -1,6 +1,7 @@
 import fs from 'fs';
 import type { Request } from 'express';
 import cfg from '../config/env';
+import logger from '../config/logger';
 import File from '../models/File';
 import FileActivity from '../models/FileActivity';
 import User from '../models/User';
@@ -15,6 +16,7 @@ import * as webhooks from '../services/webhook.service';
 import type { FileDoc, UserDoc } from '../types/models';
 import AppError from '../utils/appError';
 import asyncHandler from '../utils/asyncHandler';
+import { parseClientEncryption } from '../utils/clientEncryption';
 import { sanitizeFilename } from '../utils/files';
 import imageProcessor from '../utils/imageProcessor';
 import { sendObject } from '../utils/sendObject';
@@ -51,6 +53,7 @@ export const uploadFile = asyncHandler(async (req, res) => {
         declaredMime: req.file.mimetype,
         provider: (req.body as { provider?: string }).provider,
         fields: uploadFields(req.body),
+        clientEncryption: parseClientEncryption((req.body as { clientEncryption?: unknown }).clientEncryption),
         req,
     });
     await clearUserCache(me(req)._id);
@@ -62,6 +65,7 @@ export const uploadFile = asyncHandler(async (req, res) => {
 // @route   POST /api/files/upload-image
 export const uploadImage = asyncHandler(async (req, res) => {
     if (!req.file) throw new AppError('Please upload an image (multipart field "image")', 400);
+    if ((req.body as { clientEncryption?: unknown }).clientEncryption) throw new AppError('End-to-end encrypted files cannot be resized by the server; use POST /api/files/upload', 400, 'client_encrypted');
     const original = await fs.promises.readFile(req.file.path);
     const info = await imageProcessor.validate(original);
     if (!info.valid) throw new AppError(info.error ?? 'Invalid image', 415, 'unsupported_media_type');
@@ -87,6 +91,7 @@ export const uploadImage = asyncHandler(async (req, res) => {
 export const uploadMultiple = asyncHandler(async (req, res) => {
     const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
     if (!files.length) throw new AppError('Please upload files (multipart field "files")', 400);
+    if ((req.body as { clientEncryption?: unknown }).clientEncryption) throw new AppError('Upload end-to-end encrypted files one at a time (each has its own parameters)', 400, 'client_encrypted');
     const done: Record<string, unknown>[] = [];
     const failed: { name: string; error: string; code?: string }[] = [];
     // one after the other: each file reserves its own space, so the quota check stays exact
@@ -261,6 +266,7 @@ export const downloadFile = asyncHandler(async (req, res) => {
     if (!inline) {
         await f.incrementDownloads();
         activity.record(f._id, me(req)._id, 'download', req, target.versionNumber ? { version: target.versionNumber } : undefined);
+        logger.download('Download link issued', { fileId: String(f._id), userId: String(me(req)._id), version: target.versionNumber, variant: target.variantId });
     }
     res.status(200).json({ success: true, url, expiresIn, filename: target.filename, mimetype: target.mimetype });
 });
@@ -273,6 +279,7 @@ export const streamFile = asyncHandler(async (req, res) => {
     if (req.method === 'GET' && !req.headers.range) {
         await f.incrementDownloads();
         activity.record(f._id, me(req)._id, 'download', req);
+        logger.download('File streamed', { fileId: String(f._id), userId: String(me(req)._id) });
     }
     await sendObject(req, res, target.ref, { filename: target.filename, mimetype: target.mimetype, inline: true, etag: target.etag });
 });
@@ -282,6 +289,7 @@ export const streamFile = asyncHandler(async (req, res) => {
 export const getThumbnail = asyncHandler(async (req, res) => {
     const f = file(req);
     if (f.category !== 'image') throw new AppError('Only images have thumbnails', 400);
+    if (f.clientEncryption) throw new AppError('End-to-end encrypted images have no server-made thumbnail', 400, 'client_encrypted');
     const variant = f.getVariant('thumbnail') ?? (await fileService.generateThumbnail(f, me(req)));
     if (!variant) throw new AppError('Thumbnail could not be created', 500);
     await sendObject(req, res, fileService.refOfVariant(f, variant), { filename: `${f.originalName}-thumbnail.jpg`, mimetype: variant.mimetype ?? 'image/jpeg', inline: true, maxAge: 3600 });
@@ -334,6 +342,7 @@ export const uploadVersion = asyncHandler(async (req, res) => {
         declaredMime: req.file.mimetype,
         versionOf: f,
         reason: typeof req.body.reason === 'string' ? req.body.reason.slice(0, 200) : undefined,
+        clientEncryption: parseClientEncryption((req.body as { clientEncryption?: unknown }).clientEncryption),
         req,
     });
     await clearUserCache(f.uploadedBy);

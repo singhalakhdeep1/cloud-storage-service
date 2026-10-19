@@ -17,6 +17,7 @@ async function imageFor(req: Request, id: string, need: 'read' | 'write'): Promi
     if (!f || f.deletedAt) throw new AppError('File not found', 404, 'not_found');
     if (!access.can(f, me(req), need)) throw new AppError(need === 'write' ? 'You need write permission for this file' : 'Not authorized to access this file', 403, 'forbidden');
     if (f.category !== 'image') throw new AppError('File is not an image', 400, 'not_an_image');
+    if (f.clientEncryption) throw new AppError('End-to-end encrypted images cannot be processed by the server', 400, 'client_encrypted');
     return f;
 }
 

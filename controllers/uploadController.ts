@@ -6,6 +6,7 @@ import * as fileService from '../services/file.service';
 import * as upload from '../services/upload.service';
 import type { FileDoc, UploadSessionDoc, UserDoc } from '../types/models';
 import AppError from '../utils/appError';
+import { parseClientEncryption } from '../utils/clientEncryption';
 import asyncHandler from '../utils/asyncHandler';
 
 const me = (req: Request): UserDoc => req.user as UserDoc;
@@ -28,14 +29,14 @@ const statusView = (s: UploadSessionDoc) => ({
 // @desc    Start a resumable upload
 // @route   POST /api/upload/chunked
 export const initChunkedUpload = asyncHandler(async (req, res) => {
-    const body = req.body as { filename?: string; originalName: string; mimeType: string; totalSize: number; chunkSize?: number; provider?: string; versionOf?: string; tags?: string[] };
+    const body = req.body as { filename?: string; originalName: string; mimeType: string; totalSize: number; chunkSize?: number; provider?: string; versionOf?: string; tags?: string[]; clientEncryption?: unknown };
     let versionOf: FileDoc | undefined;
     if (body.versionOf) {
         versionOf = (await File.findById(body.versionOf)) as FileDoc | undefined;
         if (!versionOf || versionOf.deletedAt) throw new AppError('File not found', 404, 'not_found');
         if (!access.can(versionOf, me(req), 'write')) throw new AppError('You need write permission for this file', 403, 'forbidden');
     }
-    const s = await upload.init(me(req), { filename: body.filename ?? body.originalName, originalName: body.originalName, mimeType: body.mimeType, totalSize: body.totalSize, chunkSize: body.chunkSize, provider: body.provider, versionOf, tags: body.tags });
+    const s = await upload.init(me(req), { filename: body.filename ?? body.originalName, originalName: body.originalName, mimeType: body.mimeType, totalSize: body.totalSize, chunkSize: body.chunkSize, provider: body.provider, versionOf, tags: body.tags, clientEncryption: parseClientEncryption(body.clientEncryption) });
     res.status(201).json({ success: true, data: { uploadId: s.uploadId, totalChunks: s.totalChunks, chunkSize: s.chunkSize, expiresAt: s.expiresAt } });
 });
 

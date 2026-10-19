@@ -5,6 +5,7 @@
  */
 import { getRedisClient } from '../../config/redis';
 import logger from '../../config/logger';
+import { metrics } from '../metrics.service';
 
 const MAX_MEMORY_ENTRIES = 10_000;
 const memory = new Map<string, { value: string; expires: number }>();
@@ -22,18 +23,21 @@ export class CacheService {
         const redis = getRedisClient();
         if (redis) {
             try {
-                return await redis.get(this.k(key));
+                const value = await redis.get(this.k(key));
+                metrics.cache(this.namespace, value !== null);
+                return value;
             } catch (e) {
                 logger.warn('cache get failed', { key, err: (e as Error).message });
                 return null;
             }
         }
         const hit = memory.get(this.k(key));
-        if (!hit) return null;
-        if (hit.expires < Date.now()) {
-            memory.delete(this.k(key));
+        if (!hit || hit.expires < Date.now()) {
+            if (hit) memory.delete(this.k(key));
+            metrics.cache(this.namespace, false);
             return null;
         }
+        metrics.cache(this.namespace, true);
         return hit.value;
     }
 

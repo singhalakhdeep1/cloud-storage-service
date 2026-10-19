@@ -29,6 +29,8 @@ export default function FilesView({ scope, onChanged }: { scope: 'mine' | 'share
     const [open, setOpen] = useState<string | null>(null);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [dragging, setDragging] = useState(false);
+    const [e2ee, setE2ee] = useState(false);
+    const [passphrase, setPassphrase] = useState('');
     const input = useRef<HTMLInputElement>(null);
 
     useEffect(() => setView(storage.get('cs_view') === 'list' ? 'list' : 'grid'), []);
@@ -74,10 +76,17 @@ export default function FilesView({ scope, onChanged }: { scope: 'mine' | 'share
         onChanged();
     }
 
+    /** Uploads with the end-to-end option when it is on (the passphrase must be usable first). */
+    const add = (list: File[]) => {
+        if (!e2ee) return enqueue(list);
+        if (passphrase.length < 8) return toast('Enter a passphrase of at least 8 characters for end-to-end encryption', 'error');
+        enqueue(list, { passphrase });
+    };
+
     const onDrop = (e: React.DragEvent) => {
         e.preventDefault();
         setDragging(false);
-        if (scope === 'mine' && e.dataTransfer.files.length) enqueue([...e.dataTransfer.files]);
+        if (scope === 'mine' && e.dataTransfer.files.length) add([...e.dataTransfer.files]);
     };
 
     return (
@@ -101,8 +110,12 @@ export default function FilesView({ scope, onChanged }: { scope: 'mine' | 'share
                     {selected.size > 0 && scope === 'mine' && <button className="btn btn-secondary" onClick={() => void trashSelected()}>🗑️ Trash {selected.size}</button>}
                     {scope === 'mine' && (
                         <>
+                            <label className="flex items-center gap-1 text-sm text-slate-600" title="Encrypt in this browser before upload; only someone with the passphrase can open the file">
+                                <input type="checkbox" checked={e2ee} onChange={(e) => setE2ee(e.target.checked)} data-testid="e2ee-toggle" /> 🔐 End-to-end
+                            </label>
+                            {e2ee && <input className="input w-44" type="password" autoComplete="new-password" placeholder="Passphrase" aria-label="Encryption passphrase" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} />}
                             <button className="btn btn-primary" onClick={() => input.current?.click()}>⬆️ Upload</button>
-                            <input ref={input} type="file" multiple hidden data-testid="file-input" onChange={(e) => { if (e.target.files?.length) enqueue([...e.target.files]); e.target.value = ''; }} />
+                            <input ref={input} type="file" multiple hidden data-testid="file-input" onChange={(e) => { if (e.target.files?.length) add([...e.target.files]); e.target.value = ''; }} />
                         </>
                     )}
                 </div>
@@ -136,10 +149,11 @@ export default function FilesView({ scope, onChanged }: { scope: 'mine' | 'share
                                 <div className="p-2">
                                     <div className="truncate text-sm font-medium" title={f.originalName}>{f.originalName}</div>
                                     <div className="flex items-center justify-between text-xs text-slate-500">
-                                        <span>{formatBytes(f.size)}</span>
+                                        <span>{formatBytes(f.clientEncryption?.size ?? f.size)}</span>
                                         <span>{formatDate(f.createdAt)}</span>
                                     </div>
                                     <div className="mt-1 flex flex-wrap gap-1">
+                                        {f.clientEncryption && <Badge tone="green">🔐 e2e</Badge>}
                                         {f.isEncrypted && <Badge tone="green">🔒</Badge>}
                                         {f.isPublic && <Badge tone="amber">public</Badge>}
                                         {f.sharedWithCount > 0 && <Badge tone="blue">shared</Badge>}
@@ -168,8 +182,8 @@ export default function FilesView({ scope, onChanged }: { scope: 'mine' | 'share
                                 <tr key={f._id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
                                     {scope === 'mine' && <td className="p-3"><input type="checkbox" aria-label={`Select ${f.originalName}`} checked={selected.has(f._id)} onChange={() => toggle(f._id)} /></td>}
                                     <td className="p-3"><button className="flex items-center gap-2 text-left font-medium hover:text-brand-700" onClick={() => setOpen(f._id)}><span aria-hidden>{categoryIcon[f.category]}</span>{f.originalName}</button></td>
-                                    <td className="p-3 text-slate-600">{formatBytes(f.size)}</td>
-                                    <td className="p-3 text-slate-600">{f.mimetype}</td>
+                                    <td className="p-3 text-slate-600">{formatBytes(f.clientEncryption?.size ?? f.size)}</td>
+                                    <td className="p-3 text-slate-600">{f.clientEncryption ? `🔐 ${f.clientEncryption.mimetype}` : f.mimetype}</td>
                                     <td className="p-3 text-slate-600">{formatDate(f.createdAt)}</td>
                                     <td className="p-3"><Badge tone={f.permission === 'owner' ? 'green' : 'blue'}>{f.permission}</Badge></td>
                                 </tr>

@@ -11,13 +11,15 @@ import cfg from '../config/env';
 import logger from '../config/logger';
 import File from '../models/File';
 import ShareLink from '../models/ShareLink';
-import type { FileCategory, FileDoc, IFileVariant, IFileVersion, ProviderName, UserDoc } from '../types/models';
+import type { ClientEncryption, FileCategory, FileDoc, IFileVariant, IFileVersion, ProviderName, UserDoc } from '../types/models';
 import AppError from '../utils/appError';
+import { assertCipherSize, copyClientEncryption } from '../utils/clientEncryption';
 import { categoryFromMimetype, escapeRegex, keySafe, sanitizeFilename } from '../utils/files';
 import { readHead, resolveMime } from '../utils/mime';
 import virusScanner from '../utils/virusScanner';
 import * as access from './access.service';
 import * as activity from './activity.service';
+import { metrics } from './metrics.service';
 import { shouldEncrypt } from './encryption.service';
 import * as objectStore from './objectStore.service';
 import * as quota from './quota.service';
@@ -88,6 +90,8 @@ export interface IngestInput {
     req?: Pick<Request, 'ip' | 'headers'>;
     /** Skip the type check (images produced by this service itself). */
     trustedMime?: string;
+    /** The content is end-to-end encrypted by the client: it is stored as opaque bytes (no type sniffing, scanning or image work). */
+    clientEncryption?: ClientEncryption;
 }
 
 async function scan(source: IngestInput['source'], name: string, owner: UserDoc): Promise<{ scanned: boolean }> {
@@ -95,6 +99,7 @@ async function scan(source: IngestInput['source'], name: string, owner: UserDoc)
     if (result.skipped) return { scanned: false };
     if (!result.clean) {
         logger.security('Infected upload rejected', { user: String(owner._id), name, viruses: result.viruses });
+        metrics.virusDetected();
         webhooks.emit('file.infected', owner._id, { name, viruses: result.viruses });
         throw new AppError(`The file was rejected: it contains malware (${result.viruses.join(', ')})`, 422, 'infected');
     }
@@ -125,12 +130,14 @@ export interface CommitInput {
     fields?: IngestInput['fields'];
     reason?: string;
     req?: Pick<Request, 'ip' | 'headers'>;
+    clientEncryption?: ClientEncryption;
 }
 
 /** Records an already-stored object as a new file or as a new version, with quota, history, webhooks and thumbnail. */
 export async function commit(c: CommitInput): Promise<FileDoc> {
     const { user, stored, versionOf } = c;
-    const category = categoryFromMimetype(c.mimetype);
+    // an end-to-end encrypted file is listed by what it really is, although the server only holds ciphertext
+    const category = categoryFromMimetype(c.clientEncryption?.mimetype ?? c.mimetype);
     const common = {
         mimetype: c.mimetype,
         size: stored.size,
@@ -142,6 +149,7 @@ export async function commit(c: CommitInput): Promise<FileDoc> {
         checksum: stored.checksum,
         isEncrypted: stored.isEncrypted,
         encryptionInfo: stored.encryptionInfo,
+        clientEncryption: copyClientEncryption(c.clientEncryption),
         virusScanned: c.scanned,
         virusStatus: c.scanned ? 'clean' : undefined,
         metadata: c.meta?.width ? { width: c.meta.width, height: c.meta.height, format: c.meta.format } : undefined,
@@ -162,6 +170,7 @@ export async function commit(c: CommitInput): Promise<FileDoc> {
             reason: c.reason,
             isEncrypted: versionOf.isEncrypted,
             encryptionInfo: versionOf.encryptionInfo ? { iv: versionOf.encryptionInfo.iv, authTag: versionOf.encryptionInfo.authTag } : undefined,
+            clientEncryption: copyClientEncryption(versionOf.clientEncryption),
         };
         const oldVariants = versionOf.variants.map((v) => ({ key: v.key, size: v.size, storageType: versionOf.storageType }));
         const updated = await File.findOneAndUpdate(
@@ -205,6 +214,7 @@ export async function commit(c: CommitInput): Promise<FileDoc> {
         await generateThumbnail(file, user).catch((e) => logger.warn('thumbnail not generated', { fileId: String(file._id), err: (e as Error).message }));
     }
     logger.upload('File stored', { fileId: String(file._id), size: file.size, provider: file.storageType });
+    metrics.uploadStored(file.size, versionOf ? 'version' : 'file');
     return (await File.findById(file._id)) as FileDoc;
 }
 
@@ -213,8 +223,14 @@ export async function ingest(input: IngestInput): Promise<FileDoc> {
     const name = sanitizeFilename(input.originalName);
     if (input.size > cfg.MAX_FILE_SIZE) throw new AppError(`File too large. Maximum size: ${(cfg.MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`, 413, 'too_large');
 
-    const head = 'buffer' in source ? source.buffer.subarray(0, 4100) : await readHead(source.path);
-    const type = input.trustedMime ? { mimetype: input.trustedMime, detected: true } : await resolveMime(head, input.declaredMime, name);
+    const ce = input.clientEncryption;
+    if (ce) assertCipherSize(ce, input.size);
+    const head = ce ? Buffer.alloc(0) : 'buffer' in source ? source.buffer.subarray(0, 4100) : await readHead(source.path).catch((e: NodeJS.ErrnoException) => {
+        // the temporary copy vanished or was locked between receiving and reading it (typically host antivirus quarantine)
+        logger.security('Uploaded file could not be read back', { name, code: e.code });
+        throw new AppError('The uploaded file could not be read on the server (it may have been blocked by antivirus)', 422, 'upload_unreadable');
+    });
+    const type = ce ? { mimetype: 'application/octet-stream', detected: false } : input.trustedMime ? { mimetype: input.trustedMime, detected: true } : await resolveMime(head, input.declaredMime, name);
 
     // a new version of someone's file is stored in the owner's space, so the owner's quota pays for it
     const payer = versionOf ? versionOf.uploadedBy : user._id;
@@ -225,16 +241,18 @@ export async function ingest(input: IngestInput): Promise<FileDoc> {
     }
     let stored: objectStore.StoredObject | undefined;
     try {
-        const scanned = await scan(source, name, user);
+        // scanning ciphertext proves nothing, so end-to-end encrypted files are recorded as not scanned
+        const scanned = ce ? { scanned: false } : await scan(source, name, user);
         const meta = categoryFromMimetype(type.mimetype) === 'image' && type.mimetype !== 'image/svg+xml' ? await imageInfo(source) : {};
         const provider = versionOf ? versionOf.storageType : chooseProvider(user, input.provider);
         const fileId = versionOf?._id ?? new Types.ObjectId();
         const key = objectKey(user._id, fileId, versionOf ? `v${versionOf.currentVersion + 1}` : 'v1', name);
         stored = await objectStore.putObject({ provider, key, source, mimetype: type.mimetype, encrypt: shouldEncrypt(user), maxBytes: input.size });
-        return await commit({ user, name, mimetype: type.mimetype, stored, scanned: scanned.scanned, meta, fileId, versionOf, fields: input.fields, reason: input.reason, req: input.req });
+        return await commit({ user, name, mimetype: type.mimetype, stored, scanned: scanned.scanned, meta, fileId, versionOf, fields: input.fields, reason: input.reason, req: input.req, clientEncryption: ce });
     } catch (e) {
         if (stored) await objectStore.deleteObject(stored).catch(() => undefined);
         if (reservedHere) await quota.release(payer, input.size).catch(() => undefined);
+        metrics.uploadRejected(e instanceof AppError ? e.code ?? String(e.statusCode) : 'error');
         throw e;
     }
 }
@@ -294,6 +312,7 @@ export async function removeVariant(file: FileDoc, variantId: string): Promise<b
 }
 
 export async function generateThumbnail(file: FileDoc, owner: UserDoc | null): Promise<IFileVariant | undefined> {
+    if (file.clientEncryption) return undefined; // the server cannot read end-to-end encrypted content
     if (file.getVariant('thumbnail')) return file.getVariant('thumbnail');
     const { default: imageProcessor } = await import('../utils/imageProcessor');
     const buffer = await objectStore.readObjectBuffer(refOf(file), 30 * 1024 * 1024);
@@ -352,6 +371,7 @@ export async function restoreVersion(file: FileDoc, versionNumber: number, actor
         reason: `replaced by version ${versionNumber}`,
         isEncrypted: file.isEncrypted,
         encryptionInfo: file.encryptionInfo ? { iv: file.encryptionInfo.iv, authTag: file.encryptionInfo.authTag } : undefined,
+        clientEncryption: copyClientEncryption(file.clientEncryption),
     };
     const oldVariants = file.variants.map((v) => ({ key: v.key, size: v.size, storageType: file.storageType }));
     // one atomic pipeline update: the chosen version leaves the history and the current content enters it
@@ -360,15 +380,17 @@ export async function restoreVersion(file: FileDoc, versionNumber: number, actor
         [
             {
                 $set: {
-                    versions: { $concatArrays: [{ $filter: { input: '$versions', cond: { $ne: ['$$this._id', target._id] } } }, [current]] },
+                    // $literal: user-provided values such as a file name starting with "$" must not be read as field paths
+                    versions: { $concatArrays: [{ $filter: { input: '$versions', cond: { $ne: ['$$this._id', target._id] } } }, { $literal: [current] }] },
                     key: target.key,
                     size: target.size,
                     mimetype: target.mimetype ?? file.mimetype,
-                    category: categoryFromMimetype(target.mimetype ?? file.mimetype),
+                    category: categoryFromMimetype(target.clientEncryption?.mimetype ?? target.mimetype ?? file.mimetype),
                     etag: target.etag ?? null,
                     checksum: target.checksum ?? null,
                     isEncrypted: Boolean(target.isEncrypted),
                     encryptionInfo: target.encryptionInfo ? { iv: target.encryptionInfo.iv, authTag: target.encryptionInfo.authTag } : null,
+                    clientEncryption: { $literal: copyClientEncryption(target.clientEncryption) },
                     currentVersion: file.currentVersion + 1,
                     variants: [],
                     modifiedBy: actor._id,
@@ -457,7 +479,7 @@ export async function serialize(file: FileDoc, viewer?: UserDoc | null, options:
         permission: access.permissionName(level),
         provider: file.storageType,
         variants: (variants as Array<Record<string, unknown>>).map((v) => ({ id: String(v._id), type: v.type, size: v.size, dimensions: v.dimensions, format: v.format, mimetype: v.mimetype })),
-        versions: (versions as Array<Record<string, unknown>>).map((v) => ({ id: String(v._id), versionNumber: v.versionNumber, size: v.size, mimetype: v.mimetype, uploadedAt: v.uploadedAt, uploadedBy: v.uploadedBy, reason: v.reason })),
+        versions: (versions as Array<Record<string, unknown>>).map((v) => ({ id: String(v._id), versionNumber: v.versionNumber, size: v.size, mimetype: v.mimetype, uploadedAt: v.uploadedAt, uploadedBy: v.uploadedBy, reason: v.reason, ...(v.clientEncryption ? { clientEncryption: v.clientEncryption } : {}) })),
         sharedWith: isOwnerOrAdmin ? (sharedWith as unknown[]) : undefined,
         sharedWithCount: Array.isArray(sharedWith) ? sharedWith.length : 0,
         ...(thumbnailUrl && { thumbnailUrl }),

@@ -37,6 +37,7 @@ export default function ExportPanel({ file }: { file: FileInfo }) {
     return (
         <div className="space-y-3">
             <p className="text-sm text-slate-500">Connect services under Integrations first. Exports send the file to your own account there.</p>
+            {file.clientEncryption && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-800">🔐 This file is end-to-end encrypted: the export is the encrypted copy, which needs the passphrase to open.</p>}
             <div className="grid gap-3 sm:grid-cols-3">
                 <Field label="Slack message"><input className="input" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="optional" /></Field>
                 <Field label="Dropbox path"><input className="input" value={path} onChange={(e) => setPath(e.target.value)} placeholder={`/${file.originalName}`} /></Field>

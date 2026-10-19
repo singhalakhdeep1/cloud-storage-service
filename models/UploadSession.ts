@@ -25,6 +25,8 @@ const uploadSessionSchema = new Schema<IUploadSession, Model<IUploadSession, obj
         finishedAt: Date,
         metadata: { width: Number, height: Number, duration: Number },
         error: String,
+        tags: { type: [String], default: undefined },
+        clientEncryption: { type: new Schema({ scheme: String, salt: String, noncePrefix: String, iterations: Number, segmentSize: Number, mimetype: String, size: Number }, { _id: false }), default: undefined },
     },
     { timestamps: true }
 );

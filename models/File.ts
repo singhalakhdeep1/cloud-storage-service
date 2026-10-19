@@ -1,7 +1,9 @@
 import mongoose, { Schema, type Model } from 'mongoose';
+import { metrics } from '../services/metrics.service';
 import { PROVIDER_NAMES, type IFile, type IFileMethods } from '../types/models';
 
 const encryptionInfo = { iv: String, authTag: String };
+const clientEncryption = { type: new Schema({ scheme: String, salt: String, noncePrefix: String, iterations: Number, segmentSize: Number, mimetype: String, size: Number }, { _id: false }), default: undefined };
 
 const fileSchema = new Schema<IFile, Model<IFile, object, IFileMethods>, IFileMethods>(
     {
@@ -45,6 +47,7 @@ const fileSchema = new Schema<IFile, Model<IFile, object, IFileMethods>, IFileMe
                 reason: String,
                 isEncrypted: Boolean,
                 encryptionInfo,
+                clientEncryption,
             },
         ],
         currentVersion: { type: Number, default: 1 },
@@ -52,6 +55,7 @@ const fileSchema = new Schema<IFile, Model<IFile, object, IFileMethods>, IFileMe
         checksum: String,
         isEncrypted: { type: Boolean, default: false },
         encryptionInfo,
+        clientEncryption,
         virusScanned: { type: Boolean, default: false },
         virusStatus: { type: String, enum: ['clean', 'infected', 'pending', 'error'] },
         downloadCount: { type: Number, default: 0 },
@@ -83,6 +87,7 @@ fileSchema.index({ expiresAt: 1 }, { sparse: true });
 fileSchema.index({ deletedAt: 1 }, { sparse: true });
 
 fileSchema.methods.incrementDownloads = function () {
+    metrics.download('api');
     return this.model('File').updateOne({ _id: this._id }, { $inc: { downloadCount: 1 }, $set: { lastAccessedAt: new Date() } }).then(() => {
         this.downloadCount += 1;
     });

@@ -15,8 +15,9 @@ import cfg from '../config/env';
 import logger from '../config/logger';
 import File from '../models/File';
 import UploadSession from '../models/UploadSession';
-import type { FileDoc, ProviderName, UploadSessionDoc, UserDoc } from '../types/models';
+import type { ClientEncryption, FileDoc, ProviderName, UploadSessionDoc, UserDoc } from '../types/models';
 import AppError from '../utils/appError';
+import { cipherSize, copyClientEncryption } from '../utils/clientEncryption';
 import { sanitizeFilename } from '../utils/files';
 import { isAllowed } from '../utils/mime';
 import * as fileService from './file.service';
@@ -35,6 +36,8 @@ export interface InitInput {
     /** Upload a new version of this file instead of a new file. */
     versionOf?: FileDoc;
     tags?: string[];
+    /** End-to-end encrypted content: `totalSize` is the ciphertext size. */
+    clientEncryption?: ClientEncryption;
 }
 
 export async function init(user: UserDoc, input: InitInput): Promise<UploadSessionDoc> {
@@ -48,6 +51,7 @@ export async function init(user: UserDoc, input: InitInput): Promise<UploadSessi
     if (totalChunks > MAX_CHUNKS) throw new AppError(`Too many chunks (${totalChunks}); use a larger chunkSize`, 400);
     // fail early on a type that would be refused at the end anyway (the content is checked again on completion)
     if (!isAllowed(input.mimeType)) throw new AppError(`File type ${input.mimeType} is not allowed`, 415, 'unsupported_media_type');
+    if (input.clientEncryption && totalSize !== cipherSize(input.clientEncryption.size, input.clientEncryption.segmentSize)) throw new AppError('totalSize does not match the encrypted size of the content', 400, 'size_mismatch');
 
     const storageType = input.versionOf ? input.versionOf.storageType : fileService.chooseProvider(user, input.provider);
     const quotaUser = input.versionOf ? input.versionOf.uploadedBy : user._id;
@@ -66,6 +70,8 @@ export async function init(user: UserDoc, input: InitInput): Promise<UploadSessi
             reservedBytes: totalSize,
             quotaUser,
             versionOf: input.versionOf?._id,
+            tags: input.tags,
+            clientEncryption: input.clientEncryption,
             status: 'pending',
         });
     } catch (e) {
@@ -173,6 +179,8 @@ export async function complete(session: UploadSessionDoc, user: UserDoc, req?: R
             provider: s.storageType,
             reserved: true, // the quota was reserved when the session opened
             versionOf: (versionOf as FileDoc | null) ?? undefined,
+            fields: s.tags?.length ? { tags: s.tags } : undefined,
+            clientEncryption: copyClientEncryption(s.clientEncryption) ?? undefined,
             req,
         });
         await deleteChunks(s);

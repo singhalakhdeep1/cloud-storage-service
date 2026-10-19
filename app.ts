@@ -20,6 +20,7 @@ import localStorageRoutes from './routes/localStorageRoutes';
 import sharedRoutes from './routes/sharedRoutes';
 import storageRoutes from './routes/storageRoutes';
 import uploadRoutes from './routes/uploadRoutes';
+import { httpMetrics, metricsEndpoint } from './services/metrics.service';
 import { requestContext } from './services/structured-logging/structured-logging.service';
 import { defaultProviderName, tryGetStorage } from './services/storage/registry';
 
@@ -29,6 +30,7 @@ export function createApp(): Express {
     if (cfg.TRUST_PROXY) app.set('trust proxy', 1);
 
     app.use(requestContext);
+    if (cfg.METRICS_ENABLED) app.use(httpMetrics);
     app.use(securityHeaders);
     app.use(corsMiddleware);
     app.use(compression());
@@ -37,7 +39,7 @@ export function createApp(): Express {
     app.use((req, res, next) => {
         const started = Date.now();
         res.on('finish', () => {
-            if (req.path === '/health') return;
+            if (req.path === '/health' || req.path === '/metrics') return;
             logger.http(`${req.method} ${req.originalUrl.split('?')[0]} ${res.statusCode}`, { ms: Date.now() - started, ip: req.ip, requestId: req.id, userId: req.user ? String(req.user._id) : undefined });
         });
         next();
@@ -64,6 +66,7 @@ export function createApp(): Express {
 
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openApiSpec, { customSiteTitle: 'Cloud Storage Service API' }));
     app.get('/openapi.json', (_req, res) => void res.json(openApiSpec));
+    if (cfg.METRICS_ENABLED) app.get('/metrics', metricsEndpoint);
 
     // liveness: is the process up. readiness: can it serve (database, storage, cache).
     app.get('/health', (_req, res) => {

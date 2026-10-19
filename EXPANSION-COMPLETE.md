@@ -1,160 +1,89 @@
 # File Upload Cloud - Expansion Complete
 
+Status of the expansion features as built in the TypeScript code (verified end to end on 2026-10-19; see README.md
+"What has been verified").
+
 ## ✅ Features Added
 
 ### 1. Analytics Dashboard
 - **Analytics Routes**:
   - GET `/api/analytics/dashboard` - Upload analytics dashboard
-  - GET `/api/analytics/storage` - Storage analytics
-
-- **Features**:
-  - Total files and storage statistics
-  - File type distribution
-  - Uploads over time (30-day chart)
-  - Storage usage by user
-  - Most popular files
-  - Average file size calculation
+  - GET `/api/analytics/storage` - Storage analytics (`scope=all` for administrators)
+- **Features**: total files and storage, file type and category distribution, uploads over the last 30 days, most
+  downloaded files, average file size, quota usage. Responses are cached per user for 60 s (`X-Cache: HIT|MISS`).
+- **Code**: `services/analytics.service.ts`, `controllers/analyticsController.ts`, web app → Analytics.
 
 ### 2. Third-Party Integrations
 - **Integration Routes**:
-  - POST `/api/integrations/webhook` - Generic webhook endpoint
-  - POST `/api/integrations/slack` - Send notifications to Slack
-  - POST `/api/integrations/dropbox` - Upload to Dropbox
-  - POST `/api/integrations/google-drive` - Upload to Google Drive
-  - GET `/api/integrations/status` - Integration status
-
-- **Supported Integrations**:
-  - Slack notifications for file events
-  - Dropbox API integration
-  - Google Drive API integration
-  - Generic webhook support for custom integrations
-  - Integration status monitoring
+  - GET `/api/integrations` (also `/status`) - Integration status
+  - PUT / DELETE `/api/integrations/:type` - Connect / disconnect `slack`, `dropbox`, `google-drive`
+  - POST `/api/integrations/slack` - Send a message about a file to Slack
+  - POST `/api/integrations/dropbox` - Copy a file to Dropbox
+  - POST `/api/integrations/google-drive` - Copy a file to Google Drive
+  - `/api/integrations/webhooks` - Outbound webhooks: create, update, delete, test, rotate secret, delivery log
+- **Supported Integrations**: each user connects their own Slack incoming webhook, Dropbox and Google Drive tokens
+  (stored AES-256-GCM encrypted); files are streamed to Dropbox / Drive. Webhooks are signed
+  (`X-Webhook-Signature`, HMAC-SHA256), retried with backoff, logged and disabled after repeated failures; private
+  network targets are refused (SSRF protection).
+- **Code**: `services/integration.service.ts`, `services/webhook.service.ts`.
 
 ### 3. Caching Layer
-- **Cache Middleware**:
-  - `cacheMiddleware(duration)` - Cache GET requests
-  - `clearCache(pattern)` - Clear cache after mutations
-  - `getCacheStats()` - Get cache statistics
-  - `clearAllCache()` - Clear all cached data
-
-- **Features**:
-  - In-memory caching with node-cache
-  - Configurable TTL (default 10 minutes)
-  - Pattern-based cache invalidation
-  - Cache statistics tracking
+- **Cache service** (`services/cache/cache.service.ts`): get / set / delete with TTL, get-or-set, set-if-absent,
+  counters, pattern invalidation (SCAN). Redis when `REDIS_URL` is set (shared by every instance), a bounded
+  in-process cache otherwise.
+- **Cache middleware** (`middleware/cache.ts`): `cacheMiddleware(ttl)` for GET responses (keyed by user),
+  `clearUserCache(userId)` after changes. Hit rate is exported as `cloudstorage_cache_lookups_total`.
 
 ### 4. Enhanced Security
-- **Security Middleware**:
-  - `validateFileType(allowedTypes)` - File type validation
-  - `validateFileSize(maxSize)` - File size validation
-  - `scanForViruses()` - Virus scanning placeholder
-  - `encryptFile()` - AES-256-GCM encryption
-  - `decryptFile()` - Decryption for encrypted files
-  - `contentSecurityPolicy` - CSP headers
-  - `sanitizeFilename()` - Filename sanitization
-  - `generateSecureFilename()` - Secure filename generation
-
-- **Security Features**:
-  - File type whitelist validation
-  - File size limits
-  - Virus scanning integration point
-  - AES-256-GCM encryption for sensitive files
-  - Content Security Policy headers
-  - Filename sanitization to prevent path traversal
-  - Secure filename generation with timestamps and random strings
+- File type validation from the file's bytes (magic numbers) against `ALLOWED_MIME_TYPES` (`utils/mime.ts`)
+- File size limits and per-user quotas reserved before the bytes arrive
+- Virus scanning with ClamAV over the clamd `INSTREAM` protocol (`utils/virusScanner.ts`), fail-closed
+- AES-256-GCM encryption at rest, a key per object (`services/encryption.service.ts`), and end-to-end encryption
+  in the browser / SDK (`utils/clientEncryption.ts`, `sdk/fileCloudSDK.ts`)
+- Content Security Policy and other security headers (helmet), strict CORS (`middleware/security.ts`)
+- Filename sanitization; object keys never contain user input (`utils/files.ts`)
+- Signed, expiring URLs (`utils/crypto.ts`), token-bucket rate limits (`services/rate-limiting/`)
 
 ### 5. Load Balancing
-- **Nginx Configuration**:
-  - Upstream configuration with 3 backend servers
-  - Least connection load balancing
-  - Health checks and failover
-  - Rate limiting zones
-  - Large file upload support (100MB)
-  - Extended timeouts for uploads (300s)
-  - Static file caching
-  - Security headers
+- **Nginx Configuration** (`nginx.conf`, run by `docker-compose.yml`):
+  - Upstream with 3 API instances (`api-1`, `api-2`, `api-3`), `least_conn`
+  - Failover (`max_fails=3 fail_timeout=30s`)
+  - Rate limiting (20 req/s per address, burst 40)
+  - Large uploads (110 MB body limit, 300 s timeouts, streamed to the API)
+  - Static file caching (web app assets, 30 days) and security headers
+  - Health endpoints `/health` (API) and `/nginx-health`
+- Verified with three local instances behind the same configuration: even spread, failover with one instance down,
+  shared rate limits and token revocation through Redis.
 
-- **Load Balancing Features**:
-  - Round-robin with least_conn algorithm
-  - Automatic failover (max 3 failures)
-  - Health check endpoint
-  - Rate limiting (10 req/s, burst 20)
-  - Optimized for large file transfers
-  - Static file caching (30 days)
+## 📦 Dependencies
 
-## 📦 New Dependencies Added
+`axios` (integrations), `ioredis` (cache, rate limits), `prom-client` (metrics), plus the storage SDKs; see
+`package.json`.
 
-```json
-{
-  "node-cache": "^5.1.2",
-  "axios": "^1.6.2"
-}
-```
+## 🔧 Environment Variables
 
-## 🔧 Environment Variables Required
+All variables, with defaults and explanations, are in `.env.example`. The ones for these features:
 
 ```env
-# MongoDB
 MONGODB_URI=mongodb://localhost:27017/file-upload-cloud
-
-# AWS S3
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
-AWS_REGION=us-east-1
-AWS_S3_BUCKET=your-bucket-name
-
-# Encryption
-ENCRYPTION_KEY=your-32-byte-hex-key
-
-# Integrations
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-DROPBOX_ACCESS_TOKEN=your-dropbox-token
-GOOGLE_DRIVE_ACCESS_TOKEN=your-google-drive-token
-
-# Server
+REDIS_URL=redis://localhost:6379
+ENCRYPTION_KEY=64-hex-characters
+ENABLE_VIRUS_SCAN=true
+CLAMAV_HOST=localhost
+CLAMAV_PORT=3310
+METRICS_TOKEN=
 PORT=5000
 NODE_ENV=development
 ```
 
-## 🚀 Updated API Endpoints
-
-### Analytics
-- `GET /api/analytics/dashboard` - Get analytics dashboard (protected)
-- `GET /api/analytics/storage` - Get storage analytics (protected)
-
-### Integrations
-- `POST /api/integrations/webhook` - Generic webhook
-- `POST /api/integrations/slack` - Send Slack notification (protected)
-- `POST /api/integrations/dropbox` - Upload to Dropbox (protected)
-- `POST /api/integrations/google-drive` - Upload to Google Drive (protected)
-- `GET /api/integrations/status` - Get integration status (protected)
-
-### Original File Endpoints
-- `POST /api/files/upload` - Upload file(s)
-- `GET /api/files` - List files
-- `GET /api/files/:id` - Get file details
-- `GET /api/files/:id/download` - Download file
-- `DELETE /api/files/:id` - Delete file
-
-## 📊 Project Statistics
-
-- **Total Routes**: 15+ endpoints
-- **New Middleware**: 2 (cache, security)
-- **Integrations**: 4 services (Slack, Dropbox, Google Drive, Webhooks)
-- **Security Features**: 8+ implementations
-- **Caching**: In-memory with node-cache
-- **Load Balancing**: Nginx with 3 backend servers
-
 ## ✅ Completion Status
 
-**File Upload Cloud is now 100% complete with:**
-- ✅ Analytics dashboard (storage stats, type distribution, upload trends)
-- ✅ Third-party integrations (Slack, Dropbox, Google Drive, webhooks)
-- ✅ Caching layer (in-memory cache, cache invalidation, stats)
-- ✅ Enhanced security (file validation, encryption, virus scanning, CSP)
-- ✅ Load balancing (Nginx configuration, health checks, failover)
-- ✅ Original features (AWS S3, image processing, streaming, compression)
+- ✅ Analytics dashboard (storage stats, type distribution, upload trends, most downloaded)
+- ✅ Third-party integrations (Slack, Dropbox, Google Drive, signed webhooks)
+- ✅ Caching layer (Redis-backed cache, invalidation, hit-rate metric)
+- ✅ Enhanced security (content-based type checks, ClamAV, encryption at rest and end to end, CSP, rate limits)
+- ✅ Load balancing (nginx with three instances, failover, limits)
+- ✅ Original features (multi-provider storage, image processing, streaming with Range, compression)
 
----
-
-**Status: ✅ 100% COMPLETE**
+Not verified on the development machine: the Docker images, a real ClamAV daemon (a clamd protocol stand-in was
+used), real cloud accounts and the real Slack / Dropbox / Google Drive services.

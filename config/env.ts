@@ -178,6 +178,11 @@ const cfg = {
     /** Allow webhook/Slack targets on private networks (local development and tests only). */
     WEBHOOK_ALLOW_PRIVATE: bool('WEBHOOK_ALLOW_PRIVATE', false),
     WEBHOOK_BACKOFF_MS: csv('WEBHOOK_BACKOFF_MS').map(Number).filter((n) => n > 0),
+
+    /* ---- monitoring ---- */
+    METRICS_ENABLED: bool('METRICS_ENABLED', true),
+    /** When set, GET /metrics requires `Authorization: Bearer <token>`. */
+    METRICS_TOKEN: str('METRICS_TOKEN'),
 };
 
 if (cfg.isProd) {

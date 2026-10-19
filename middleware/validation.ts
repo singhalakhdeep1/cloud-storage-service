@@ -55,6 +55,8 @@ export const schemas = {
         provider,
         versionOf: objectId,
         tags: Joi.array().items(Joi.string().max(40)).max(20),
+        // checked in detail by utils/clientEncryption
+        clientEncryption: Joi.alternatives(Joi.object().unknown(true), Joi.string().max(2000)),
     }),
 
     imageResize: Joi.object({

@@ -11,6 +11,21 @@ export interface EncryptionInfo {
     authTag: string;
 }
 
+/** End-to-end encryption parameters of content the client encrypted (see utils/clientEncryption.ts). Not secret. */
+export interface ClientEncryption {
+    scheme: 'pbkdf2-aes256gcm-v1';
+    /** base64, 16 bytes */
+    salt: string;
+    /** base64, 8 bytes */
+    noncePrefix: string;
+    iterations: number;
+    segmentSize: number;
+    /** Type of the plain content. */
+    mimetype: string;
+    /** Size of the plain content. */
+    size: number;
+}
+
 export interface IUser {
     name: string;
     email: string;
@@ -67,6 +82,7 @@ export interface IFileVersion {
     reason?: string;
     isEncrypted?: boolean;
     encryptionInfo?: EncryptionInfo;
+    clientEncryption?: ClientEncryption | null;
 }
 
 export interface IFileShare {
@@ -97,6 +113,8 @@ export interface IFile {
     checksum?: string;
     isEncrypted: boolean;
     encryptionInfo?: EncryptionInfo;
+    /** Set when the client encrypted the content end to end (the server holds ciphertext only). */
+    clientEncryption?: ClientEncryption | null;
     virusScanned: boolean;
     virusStatus?: 'clean' | 'infected' | 'pending' | 'error';
     downloadCount: number;
@@ -149,6 +167,10 @@ export interface IUploadSession {
     finishedAt?: Date;
     metadata?: { width?: number; height?: number; duration?: number };
     error?: string;
+    /** Tags for the file the session creates. */
+    tags?: string[];
+    /** Set when the chunks are end-to-end encrypted content. */
+    clientEncryption?: ClientEncryption | null;
     createdAt: Date;
     updatedAt: Date;
 }

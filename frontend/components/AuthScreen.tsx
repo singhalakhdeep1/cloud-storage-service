@@ -25,7 +25,8 @@ export default function AuthScreen() {
             else await signUp(name, email, password);
         } catch (err) {
             setError(errorMessage(err));
-            if (err instanceof FileCloudError && err.errors) setFieldErrors(Object.fromEntries(err.errors.map((x) => [x.field, x.message])));
+            // one field can fail several rules (e.g. too short and no digit): show them all
+            if (err instanceof FileCloudError && err.errors) setFieldErrors(err.errors.reduce<Record<string, string>>((all, x) => ({ ...all, [x.field]: all[x.field] ? `${all[x.field]}. ${x.message}` : x.message }), {}));
         } finally {
             setBusy(false);
         }

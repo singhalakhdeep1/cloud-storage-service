@@ -26,7 +26,7 @@ const ops: Op[] = [
     { m: 'post', p: '/api/auth/logout-all', tag: 'Auth', summary: 'Sign out every device' },
     { m: 'delete', p: '/api/auth/account', tag: 'Auth', summary: 'Deactivate the account', body: ['password:string!'] },
     // files
-    { m: 'post', p: '/api/files/upload', tag: 'Files', summary: 'Upload one file', form: ['file:binary!', 'isPublic:boolean', 'tags:string', 'description:string', 'expiresAt:string', 'provider:string'] },
+    { m: 'post', p: '/api/files/upload', tag: 'Files', summary: 'Upload one file. End-to-end encrypted content adds `clientEncryption` (JSON of the scheme parameters)', form: ['file:binary!', 'isPublic:boolean', 'tags:string', 'description:string', 'expiresAt:string', 'provider:string', 'clientEncryption:string'] },
     { m: 'post', p: '/api/files/upload-image', tag: 'Files', summary: 'Upload an image, scaled down to at most 1920x1080', form: ['image:binary!'] },
     { m: 'post', p: '/api/files/upload-multiple', tag: 'Files', summary: 'Upload up to 10 files', form: ['files:binary!'] },
     { m: 'post', p: '/api/files/presigned-url', tag: 'Files', summary: 'Get a URL to upload straight to the storage provider', body: ['filename:string!', 'contentType:string!', 'size:integer!', 'provider:string', 'versionOf:string'] },
@@ -46,7 +46,7 @@ const ops: Op[] = [
     { m: 'post', p: '/api/files/{id}/trash', tag: 'Files', summary: 'Move to the trash' },
     { m: 'post', p: '/api/files/{id}/restore', tag: 'Files', summary: 'Bring back from the trash' },
     { m: 'get', p: '/api/files/{id}/versions', tag: 'Versions', summary: 'Version history' },
-    { m: 'post', p: '/api/files/{id}/versions', tag: 'Versions', summary: 'Upload new content as the next version', form: ['file:binary!', 'reason:string'] },
+    { m: 'post', p: '/api/files/{id}/versions', tag: 'Versions', summary: 'Upload new content as the next version', form: ['file:binary!', 'reason:string', 'clientEncryption:string'] },
     { m: 'post', p: '/api/files/{id}/versions/{version}/restore', tag: 'Versions', summary: 'Make an older version current' },
     { m: 'delete', p: '/api/files/{id}/versions/{version}', tag: 'Versions', summary: 'Delete one old version' },
     { m: 'get', p: '/api/files/{id}/shares', tag: 'Sharing', summary: 'People the file is shared with' },
@@ -57,9 +57,10 @@ const ops: Op[] = [
     { m: 'delete', p: '/api/files/{id}/links/{linkId}', tag: 'Sharing', summary: 'Revoke a share link' },
     { m: 'get', p: '/api/shared/{token}', tag: 'Public links', summary: 'What a share link points to', auth: 'none' },
     { m: 'post', p: '/api/shared/{token}/download', tag: 'Public links', summary: 'Get a download URL for a share link', auth: 'none', body: ['password:string', 'inline:boolean'] },
+    { m: 'post', p: '/api/shared/{token}/preview', tag: 'Public links', summary: 'Get a URL to show the file in the page (view links too; not counted as a download)', auth: 'none', body: ['password:string'] },
     { m: 'get', p: '/api/content/{token}', tag: 'Public links', summary: 'Signed content link (encrypted files stream through here)', auth: 'none' },
     // chunked
-    { m: 'post', p: '/api/upload/chunked', tag: 'Resumable uploads', summary: 'Start a resumable upload (space is reserved)', body: ['originalName:string!', 'mimeType:string!', 'totalSize:integer!', 'chunkSize:integer', 'provider:string', 'versionOf:string'] },
+    { m: 'post', p: '/api/upload/chunked', tag: 'Resumable uploads', summary: 'Start a resumable upload (space is reserved)', body: ['originalName:string!', 'mimeType:string!', 'totalSize:integer!', 'chunkSize:integer', 'provider:string', 'versionOf:string', 'tags:array', 'clientEncryption:object'] },
     { m: 'get', p: '/api/upload/chunked', tag: 'Resumable uploads', summary: 'My unfinished uploads' },
     { m: 'put', p: '/api/upload/chunked/{id}', tag: 'Resumable uploads', summary: 'Send one chunk', form: ['chunk:binary!', 'chunkNumber:integer!', 'checksum:string'] },
     { m: 'post', p: '/api/upload/chunked/{id}/complete', tag: 'Resumable uploads', summary: 'Assemble the chunks into the file' },
@@ -107,6 +108,10 @@ const ops: Op[] = [
     { m: 'delete', p: '/api/storage/providers/{provider}/buckets/{bucket}', tag: 'Storage providers', summary: 'Delete a bucket', auth: 'admin' },
     { m: 'get', p: '/api/storage/providers/{provider}/buckets/{bucket}/objects', tag: 'Storage providers', summary: 'List objects', auth: 'admin', query: ['prefix', 'limit', 'cursor'] },
     { m: 'get', p: '/api/storage/providers/{provider}/buckets/{bucket}/presign', tag: 'Storage providers', summary: 'Presigned download URL', auth: 'admin', query: ['key', 'expiresIn'] },
+    // operations
+    { m: 'get', p: '/health', tag: 'Operations', summary: 'Liveness', auth: 'none' },
+    { m: 'get', p: '/health/ready', tag: 'Operations', summary: 'Readiness: database, default storage and Redis', auth: 'none' },
+    { m: 'get', p: '/metrics', tag: 'Operations', summary: 'Prometheus metrics (bearer METRICS_TOKEN when set)', auth: 'none' },
 ];
 
 const typeOf = (t: string): Record<string, unknown> => (t === 'binary' ? { type: 'string', format: 'binary' } : t === 'array' ? { type: 'array', items: { type: 'string' } } : { type: t });

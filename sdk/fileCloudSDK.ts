@@ -6,6 +6,8 @@
  *   await sdk.login('me@example.com', 'secret');
  *   const file = await sdk.upload(new Blob(['hello']), 'hello.txt');
  *   const big = await sdk.uploadLarge(bigBlob, 'video.mp4', { onProgress: (p) => console.log(p.percent) });
+ *   const secret = await sdk.uploadEncrypted(blob, 'notes.pdf', 'my passphrase'); // end-to-end encrypted
+ *   const { data } = await sdk.downloadDecrypted(secret._id, 'my passphrase');
  */
 
 export class FileCloudError extends Error {
@@ -50,6 +52,8 @@ export interface FileInfo {
     isPublic: boolean;
     accessControl: 'private' | 'public' | 'shared';
     isEncrypted: boolean;
+    /** Present when the content is end-to-end encrypted: download with `downloadDecrypted`. */
+    clientEncryption?: ClientEncryption | null;
     tags: string[];
     description?: string;
     currentVersion: number;
@@ -60,7 +64,7 @@ export interface FileInfo {
     deletedAt?: string | null;
     metadata?: { width?: number; height?: number; format?: string; compressed?: boolean };
     variants: { id: string; type: string; size: number; dimensions?: { width?: number; height?: number }; format?: string; mimetype?: string }[];
-    versions: { id: string; versionNumber: number; size: number; mimetype?: string; uploadedAt: string; reason?: string }[];
+    versions: { id: string; versionNumber: number; size: number; mimetype?: string; uploadedAt: string; reason?: string; clientEncryption?: ClientEncryption }[];
     sharedWith?: { user: string; permission: string }[];
     sharedWithCount: number;
     thumbnailUrl?: string;
@@ -101,6 +105,8 @@ export interface UploadOptions {
     provider?: string;
     onProgress?: (p: Progress) => void;
     signal?: AbortSignal;
+    /** Parameters of content that was encrypted with `encryptBlob` (set by `uploadEncrypted`). */
+    clientEncryption?: ClientEncryption;
 }
 
 export interface LargeUploadOptions extends UploadOptions {
@@ -113,6 +119,8 @@ export interface LargeUploadOptions extends UploadOptions {
     /** Make the upload a new version of this file. */
     versionOf?: string;
     onSession?: (uploadId: string) => void;
+    /** Type announced for the upload (defaults to the blob's type). */
+    mimeType?: string;
 }
 
 type Json = Record<string, unknown>;
@@ -123,6 +131,91 @@ const q = (params: Record<string, unknown> = {}): string => {
     const out = s.toString();
     return out ? `?${out}` : '';
 };
+
+/* ------------------------------------------------- end-to-end encryption */
+
+/** Parameters of end-to-end encrypted content. The server stores them; none of them is secret. */
+export interface ClientEncryption {
+    scheme: 'pbkdf2-aes256gcm-v1';
+    salt: string;
+    noncePrefix: string;
+    iterations: number;
+    segmentSize: number;
+    mimetype: string;
+    size: number;
+}
+
+export const E2E_SCHEME = 'pbkdf2-aes256gcm-v1' as const;
+const TAG_BYTES = 16;
+
+const toB64 = (u8: Uint8Array): string => btoa(String.fromCharCode(...u8));
+const fromB64 = (s: string): Uint8Array => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function deriveKey(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
+    const subtle = globalThis.crypto.subtle;
+    const base = await subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+/** Nonce of segment i: the 8-byte prefix and i as a 4-byte big-endian counter. */
+function segmentNonce(prefix: Uint8Array, i: number): Uint8Array {
+    const n = new Uint8Array(12);
+    n.set(prefix, 0);
+    new DataView(n.buffer).setUint32(8, i);
+    return n;
+}
+
+/** Binds each segment to its position and to the segment count, so dropped, reordered or appended segments fail. */
+const segmentAad = (i: number, count: number): Uint8Array => new TextEncoder().encode(`${E2E_SCHEME}:${i}:${count}`);
+
+const segmentCount = (size: number, segmentSize: number): number => Math.max(1, Math.ceil(size / segmentSize));
+
+/**
+ * Encrypts content on this device (AES-256-GCM, key from the passphrase with PBKDF2-SHA256). Only the returned
+ * ciphertext and parameters ever reach the server. Losing the passphrase means losing the file.
+ */
+export async function encryptBlob(data: Blob, passphrase: string, options: { iterations?: number; segmentSize?: number } = {}): Promise<{ blob: Blob; clientEncryption: ClientEncryption }> {
+    if (!passphrase || passphrase.length < 8) throw new FileCloudError('Use a passphrase of at least 8 characters', 0, 'weak_passphrase');
+    const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    const prefix = globalThis.crypto.getRandomValues(new Uint8Array(8));
+    const iterations = options.iterations ?? 310_000;
+    const segmentSize = options.segmentSize ?? 1024 * 1024;
+    const key = await deriveKey(passphrase, salt, iterations);
+    const count = segmentCount(data.size, segmentSize);
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < count; i++) {
+        const plain = await data.slice(i * segmentSize, Math.min(data.size, (i + 1) * segmentSize)).arrayBuffer();
+        parts.push(new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv: segmentNonce(prefix, i), additionalData: segmentAad(i, count) }, key, plain)));
+    }
+    return {
+        blob: new Blob(parts, { type: 'application/octet-stream' }),
+        clientEncryption: { scheme: E2E_SCHEME, salt: toB64(salt), noncePrefix: toB64(prefix), iterations, segmentSize, mimetype: data.type || 'application/octet-stream', size: data.size },
+    };
+}
+
+/** Decrypts content made by `encryptBlob`. Throws `decrypt_failed` for a wrong passphrase or changed bytes. */
+export async function decryptBuffer(cipher: ArrayBuffer, ce: ClientEncryption, passphrase: string): Promise<ArrayBuffer> {
+    if (ce.scheme !== E2E_SCHEME) throw new FileCloudError(`Unsupported encryption scheme ${ce.scheme}`, 0, 'unsupported_scheme');
+    const count = segmentCount(ce.size, ce.segmentSize);
+    if (cipher.byteLength !== ce.size + count * TAG_BYTES) throw new FileCloudError('The encrypted file is damaged (unexpected length)', 0, 'decrypt_failed');
+    const key = await deriveKey(passphrase, fromB64(ce.salt), ce.iterations);
+    const prefix = fromB64(ce.noncePrefix);
+    const out = new Uint8Array(ce.size);
+    let read = 0;
+    for (let i = 0; i < count; i++) {
+        const plainLength = Math.min(ce.segmentSize, ce.size - i * ce.segmentSize);
+        const piece = cipher.slice(read, read + plainLength + TAG_BYTES);
+        read += plainLength + TAG_BYTES;
+        let plain: ArrayBuffer;
+        try {
+            plain = await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv: segmentNonce(prefix, i), additionalData: segmentAad(i, count) }, key, piece);
+        } catch {
+            throw new FileCloudError('Wrong passphrase, or the file was changed after it was encrypted', 0, 'decrypt_failed');
+        }
+        out.set(new Uint8Array(plain), i * ce.segmentSize);
+    }
+    return out.buffer;
+}
 
 async function sha256Hex(data: ArrayBuffer): Promise<string> {
     const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
@@ -237,6 +330,7 @@ export class FileCloudSDK {
         if (o.description) form.append('description', o.description);
         if (o.expiresAt) form.append('expiresAt', new Date(o.expiresAt).toISOString());
         if (o.provider) form.append('provider', o.provider);
+        if (o.clientEncryption) form.append('clientEncryption', JSON.stringify(o.clientEncryption));
         form.append(field, data, name);
         return form;
     }
@@ -304,7 +398,7 @@ export class FileCloudSDK {
         } else {
             const init = (
                 await this.request<{ data: { uploadId: string; totalChunks: number; chunkSize: number } }>('POST', '/upload/chunked', {
-                    json: { originalName: name, filename: name, mimeType: data.type || 'application/octet-stream', totalSize: data.size, chunkSize, provider: options.provider, versionOf: options.versionOf, tags: options.tags },
+                    json: { originalName: name, filename: name, mimeType: options.mimeType ?? (data.type || 'application/octet-stream'), totalSize: data.size, chunkSize, provider: options.provider, versionOf: options.versionOf, tags: options.tags, clientEncryption: options.clientEncryption },
                     signal: options.signal,
                 })
             ).data;
@@ -347,6 +441,25 @@ export class FileCloudSDK {
             })
         );
         return (await this.request<{ data: FileInfo }>('POST', `/upload/chunked/${uploadId}/complete`, { signal: options.signal })).data;
+    }
+
+    /**
+     * End-to-end encrypted upload: the content is encrypted here and the server only stores ciphertext. Large files
+     * go through the resumable upload. The server cannot scan, preview or resize these files.
+     */
+    async uploadEncrypted(data: Blob, name: string, passphrase: string, options: LargeUploadOptions & { largeThreshold?: number } = {}): Promise<FileInfo> {
+        const { blob, clientEncryption } = await encryptBlob(data, passphrase);
+        if (blob.size > (options.largeThreshold ?? 8 * 1024 * 1024) || options.versionOf) return this.uploadLarge(blob, name, { ...options, clientEncryption, mimeType: clientEncryption.mimetype });
+        return this.upload(blob, name, { ...options, clientEncryption });
+    }
+
+    /** Downloads end-to-end encrypted content and decrypts it here. */
+    async downloadDecrypted(id: string, passphrase: string, options: { version?: number } = {}): Promise<{ data: ArrayBuffer; mimetype: string; name: string }> {
+        const info = await this.get(id);
+        const ce = options.version && options.version !== info.currentVersion ? info.versions.find((v) => v.versionNumber === options.version)?.clientEncryption : info.clientEncryption;
+        if (!ce) throw new FileCloudError('This file (version) is not end-to-end encrypted; use download()', 400, 'not_client_encrypted');
+        const cipher = await this.download(id, options);
+        return { data: await decryptBuffer(cipher, ce, passphrase), mimetype: ce.mimetype, name: info.originalName };
     }
 
     /** Unfinished resumable uploads (to offer "resume"). */
@@ -420,6 +533,7 @@ export class FileCloudSDK {
     async uploadVersion(id: string, data: Blob, name: string, reason?: string, options: UploadOptions = {}): Promise<FileInfo> {
         const form = new FormData();
         if (reason) form.append('reason', reason);
+        if (options.clientEncryption) form.append('clientEncryption', JSON.stringify(options.clientEncryption));
         form.append('file', data, name);
         return (await this.send<{ data: FileInfo }>('POST', `/files/${id}/versions`, form, options)).data;
     }
@@ -461,11 +575,21 @@ export class FileCloudSDK {
 
     /** What a share link points to (no sign-in needed). */
     async describeLink(token: string) {
-        return (await this.request<{ data: { name: string; size: number; mimetype: string; category: string; sharedBy?: string; requiresPassword: boolean; permission: 'view' | 'download'; expiresAt?: string; remainingDownloads?: number } }>('GET', `/shared/${token}`, { auth: false })).data;
+        return (await this.request<{ data: { name: string; size: number; mimetype: string; category: string; sharedBy?: string; requiresPassword: boolean; permission: 'view' | 'download'; expiresAt?: string; remainingDownloads?: number; hasPreview?: boolean; clientEncryption?: ClientEncryption } }>('GET', `/shared/${token}`, { auth: false })).data;
     }
 
     openLink(token: string, password?: string, inline = false): Promise<{ url: string; name: string; expiresIn: number }> {
         return this.request('POST', `/shared/${token}/${inline ? 'preview' : 'download'}`, { json: { password, inline }, auth: false });
+    }
+
+    /** Opens a share link to an end-to-end encrypted file and decrypts it with the passphrase the owner gave you. */
+    async openLinkDecrypted(token: string, passphrase: string, password?: string): Promise<{ data: ArrayBuffer; mimetype: string; name: string }> {
+        const info = await this.describeLink(token);
+        if (!info.clientEncryption) throw new FileCloudError('This link is not to an end-to-end encrypted file', 400, 'not_client_encrypted');
+        const { url } = await this.openLink(token, password, info.permission === 'view');
+        const res = await this.fetchImpl(url);
+        if (!res.ok) throw new FileCloudError(`Download failed (${res.status})`, res.status);
+        return { data: await decryptBuffer(await res.arrayBuffer(), info.clientEncryption, passphrase), mimetype: info.clientEncryption.mimetype, name: info.name };
     }
 
     /* -------------------------------------------------------------- images */
@@ -538,6 +662,16 @@ export class FileCloudSDK {
         stats: () => this.request<{ data: Json }>('GET', '/admin/stats'),
         system: () => this.request<{ data: { providers: { name: string; configured: boolean; healthy?: boolean; isDefault: boolean; bucket?: string; error?: string }[]; redis: boolean | null; virusScanner: boolean | null } }>('GET', '/admin/system'),
         runJanitor: () => this.request<{ data: Json }>('POST', '/admin/janitor/run'),
+        /** Provider administration: buckets / containers and the objects in them. */
+        storage: {
+            providers: () => this.request<{ data: { name: string; configured: boolean; isDefault: boolean; buckets: boolean }[] }>('GET', '/storage/providers'),
+            buckets: (provider: string) => this.request<{ data: string[] }>('GET', `/storage/providers/${provider}/buckets`),
+            createBucket: (provider: string, name: string) => this.request('POST', `/storage/providers/${provider}/buckets`, { json: { name } }),
+            deleteBucket: (provider: string, bucket: string) => this.request('DELETE', `/storage/providers/${provider}/buckets/${encodeURIComponent(bucket)}`),
+            objects: (provider: string, bucket: string, params: { prefix?: string; limit?: number; cursor?: string } = {}) =>
+                this.request<{ data: { files: { key: string; size: number; lastModified?: string }[]; nextCursor?: string } }>('GET', `/storage/providers/${provider}/buckets/${encodeURIComponent(bucket)}/objects${q(params)}`),
+            presign: (provider: string, bucket: string, key: string, expiresIn = 300) => this.request<{ url: string; expiresIn: number }>('GET', `/storage/providers/${provider}/buckets/${encodeURIComponent(bucket)}/presign${q({ key, expiresIn })}`),
+        },
     };
 }
 

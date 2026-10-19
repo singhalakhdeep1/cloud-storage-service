@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { errorMessage, sdk } from '@/lib/api';
 import { formatBytes, formatDate } from '@/lib/format';
 import { BarChart } from './AnalyticsView';
+import BucketBrowser from './BucketBrowser';
 import { Badge, Spinner, useAsync, useToast } from './ui';
 
 type Sub = 'users' | 'overview' | 'system';
@@ -101,6 +102,10 @@ function System() {
                         </li>
                     ))}
                 </ul>
+            </section>
+            <section className="card p-4">
+                <h2 className="mb-3 font-semibold">Buckets and objects</h2>
+                <BucketBrowser />
             </section>
             <section className="card flex flex-wrap items-center gap-6 p-4 text-sm">
                 <span>Redis: <Badge tone={s?.redis === null ? 'slate' : s?.redis ? 'green' : 'red'}>{s?.redis === null ? 'not used' : s?.redis ? 'connected' : 'down'}</Badge></span>

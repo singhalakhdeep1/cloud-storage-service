@@ -5,58 +5,36 @@ This document describes the cloud storage provider integrations added to the clo
 
 ## Technologies Added
 
-### 1. MinIO
-- MinIO JavaScript SDK
-- S3-compatible API
-- File upload/download
-- Bucket management
+Every provider implements one storage interface (`services/storage/types.ts`: put / get with byte ranges / head /
+delete / list / presigned download / presigned upload / ping, plus bucket administration), chosen per file through
+`services/storage/registry.ts`. The S3-compatible stores share one adapter built on the AWS SDK v3.
 
-### 2. DigitalOcean Spaces
-- AWS SDK for S3
-- Spaces API
-- Presigned URLs
-- Bucket operations
-
-### 3. Backblaze B2
-- Backblaze B2 SDK
-- File upload/download
-- Bucket management
-- Download authorization
-
-### 4. Wasabi
-- AWS SDK for S3
-- Wasabi S3 API
-- Presigned URLs
-- Bucket operations
-
-### 5. Cloudflare R2
-- AWS SDK for S3
-- R2 S3-compatible API
-- Bucket listing
-- Presigned URLs
-
-### 6. Google Cloud Storage
-- Google Cloud Storage SDK
-- File upload/download
-- Signed URLs
-- Bucket management
-
-### 7. Azure Blob Storage
-- Azure Storage SDK
-- Blob upload/download
-- SAS URLs
-- Container management
+| Provider | Adapter | Protocol |
+|---|---|---|
+| 1. MinIO | `services/storage/s3.provider.ts` | S3 API (path-style) |
+| 2. DigitalOcean Spaces | `services/storage/s3.provider.ts` | S3 API |
+| 3. Backblaze B2 | `services/storage/s3.provider.ts` | B2's S3-compatible API (application key id + key) |
+| 4. Wasabi | `services/storage/s3.provider.ts` | S3 API |
+| 5. Cloudflare R2 | `services/storage/s3.provider.ts` | S3 API |
+| 6. Google Cloud Storage | `services/storage/gcs.provider.ts` | @google-cloud/storage, V4 signed URLs |
+| 7. Azure Blob Storage | `services/storage/azure.provider.ts` | @azure/storage-blob, SAS URLs |
+| AWS S3 and local disk | `s3.provider.ts`, `local.provider.ts` | AWS SDK v3 / signed API URLs |
 
 ## Files Created
 
 ### Controllers (in controllers/storage/)
-- `minioController.js` - MinIO controller
-- `digitalOceanController.js` - DigitalOcean Spaces controller
-- `backblazeController.js` - Backblaze B2 controller
-- `wasabiController.js` - Wasabi controller
-- `cloudflareR2Controller.js` - Cloudflare R2 controller
-- `gcsController.js` - Google Cloud Storage controller
-- `azureBlobController.js` - Azure Blob Storage controller
+- `minioController.ts` - MinIO controller
+- `digitalOceanController.ts` - DigitalOcean Spaces controller
+- `backblazeController.ts` - Backblaze B2 controller (including `getDownloadAuthorization`)
+- `wasabiController.ts` - Wasabi controller
+- `cloudflareR2Controller.ts` - Cloudflare R2 controller
+- `gcsController.ts` - Google Cloud Storage controller
+- `azureBlobController.ts` - Azure Blob Storage controller
+- `awsS3Controller.ts` - AWS S3 controller
+- `base.ts` - the shared operations; `index.ts` - controller per provider
+
+They are exposed to administrators under `/api/storage/providers/:provider/...` (buckets, objects, presign) and in
+the web app under Admin → System → Buckets and objects.
 
 ## Features
 
@@ -122,27 +100,16 @@ This document describes the cloud storage provider integrations added to the clo
 - Container existence check
 - Container listing
 
-## Installation Required
+## Installation
 
-Add to `package.json`:
-```json
-{
-  "dependencies": {
-    "minio": "^7.1.3",
-    "aws-sdk": "^2.1500.0",
-    "backblaze-b2": "^1.7.0",
-    "@google-cloud/storage": "^7.7.0",
-    "@azure/storage-blob": "^12.17.0"
-  }
-}
-```
-
-Run:
-```bash
-npm install
-```
+The SDKs are dependencies in `package.json` (`@aws-sdk/client-s3`, `@aws-sdk/lib-storage`,
+`@aws-sdk/s3-request-presigner`, `@google-cloud/storage`, `@azure/storage-blob`); `npm install` installs them. They
+are loaded only when their provider is first used.
 
 ## Environment Variables
+
+A provider is available when its variables are set (`.env.example` lists them all); `STORAGE_PROVIDER` picks the
+default for new files.
 
 ```env
 # MinIO
@@ -151,40 +118,46 @@ MINIO_PORT=9000
 MINIO_USE_SSL=false
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=files
 
 # DigitalOcean Spaces
 DO_ENDPOINT=https://nyc3.digitaloceanspaces.com
 DO_ACCESS_KEY_ID=your_access_key
 DO_SECRET_ACCESS_KEY=your_secret_key
 DO_REGION=nyc3
+DO_BUCKET=your_space
 
-# Backblaze B2
-B2_ACCOUNT_ID=your_account_id
+# Backblaze B2 (B2_ACCOUNT_ID is accepted for B2_KEY_ID)
+B2_KEY_ID=your_application_key_id
 B2_APPLICATION_KEY=your_application_key
+B2_BUCKET=your_bucket
 
 # Wasabi
 WASABI_ENDPOINT=https://s3.wasabisys.com
 WASABI_ACCESS_KEY_ID=your_access_key
 WASABI_SECRET_ACCESS_KEY=your_secret_key
 WASABI_REGION=us-east-1
+WASABI_BUCKET=your_bucket
 
 # Cloudflare R2
 R2_ACCOUNT_ID=your_account_id
 R2_ACCESS_KEY_ID=your_access_key
 R2_SECRET_ACCESS_KEY=your_secret_key
-R2_ENDPOINT=https://your_account_id.r2.cloudflarestorage.com
+R2_BUCKET=your_bucket
 
 # Google Cloud Storage
 GCS_PROJECT_ID=your_project_id
 GCS_KEY_FILENAME=path/to/keyfile.json
+GCS_BUCKET=your_bucket
 
 # Azure Blob Storage
 AZURE_STORAGE_CONNECTION_STRING=your_connection_string
+AZURE_STORAGE_CONTAINER=files
 ```
 
 ## Notes
-- All code is written but packages are not installed (per user request)
-- Requires API keys/credentials for each storage provider
-- MinIO requires a running MinIO server or cluster
-- Google Cloud Storage requires a service account key file
-- Azure Blob Storage requires a connection string
+- Verified end to end with each of these as the default store: S3 API (SeaweedFS, the code path of MinIO, Spaces,
+  B2, Wasabi and R2), Azure Blob (Azurite) and GCS (fake-gcs-server). Real cloud accounts were not used.
+- Browsers upload and download straight from the provider with presigned URLs; when browsers reach the store at
+  another address than the API (Docker), set `<PREFIX>_PUBLIC_ENDPOINT` (e.g. `MINIO_PUBLIC_ENDPOINT`).
+- Google Cloud Storage needs a service-account key (or application default credentials) to sign URLs.

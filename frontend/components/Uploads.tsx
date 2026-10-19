@@ -19,13 +19,22 @@ export interface UploadItem {
     uploadId?: string;
     error?: string;
     versionOf?: string;
+    /** Encrypted in this browser before upload. */
+    encrypted?: boolean;
 }
 
 interface UploadsApi {
     items: UploadItem[];
-    enqueue: (files: File[], options?: { versionOf?: string; tags?: string[] }) => void;
+    enqueue: (files: File[], options?: EnqueueOptions) => void;
     /** Called after any upload finishes, so lists can refresh. */
     onFinished: (fn: (file: FileInfo) => void) => () => void;
+}
+
+export interface EnqueueOptions {
+    versionOf?: string;
+    tags?: string[];
+    /** End-to-end encrypt with this passphrase (it stays in this tab). */
+    passphrase?: string;
 }
 
 const UploadsContext = createContext<UploadsApi>({ items: [], enqueue: () => undefined, onFinished: () => () => undefined });
@@ -35,6 +44,7 @@ interface Job extends UploadItem {
     file: File;
     controller: AbortController;
     tags?: string[];
+    passphrase?: string;
 }
 
 export function UploadProvider({ children }: { children: ReactNode }) {
@@ -45,7 +55,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const nextId = useRef(1);
     const running = useRef(0);
 
-    const publish = useCallback(() => setItems(jobs.current.map(({ file: _f, controller: _c, tags: _t, ...view }) => view)), []);
+    const publish = useCallback(() => setItems(jobs.current.map(({ file: _f, controller: _c, tags: _t, passphrase: _p, ...view }) => view)), []);
     const patch = useCallback(
         (job: Job, change: Partial<UploadItem>) => {
             Object.assign(job, change);
@@ -61,7 +71,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             running.current++;
             patch(job, { status: 'uploading', percent: 0 });
             const onProgress = (p: { percent: number }) => patch(job, { percent: p.percent });
-            const run = job.resumable
+            const run = job.passphrase
+                ? sdk.uploadEncrypted(job.file, job.name, job.passphrase, { versionOf: job.versionOf, tags: job.tags, signal: job.controller.signal, onProgress, largeThreshold: LARGE_FILE })
+                : job.resumable
                 ? sdk.uploadLarge(job.file, job.name, { versionOf: job.versionOf, tags: job.tags, signal: job.controller.signal, uploadId: job.uploadId, onSession: (id) => (job.uploadId = id), onProgress })
                 : job.versionOf
                   ? sdk.uploadVersion(job.versionOf, job.file, job.name, undefined, { onProgress, signal: job.controller.signal })
@@ -84,9 +96,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     }, [patch, toast]);
 
     const enqueue = useCallback(
-        (files: File[], options: { versionOf?: string; tags?: string[] } = {}) => {
+        (files: File[], options: EnqueueOptions = {}) => {
             for (const file of files) {
-                jobs.current.push({ id: nextId.current++, name: file.name, size: file.size, status: 'queued', percent: 0, resumable: file.size > LARGE_FILE, versionOf: options.versionOf, tags: options.tags, file, controller: new AbortController() });
+                jobs.current.push({ id: nextId.current++, name: file.name, size: file.size, status: 'queued', percent: 0, resumable: !options.passphrase && file.size > LARGE_FILE, versionOf: options.versionOf, tags: options.tags, passphrase: options.passphrase, encrypted: Boolean(options.passphrase), file, controller: new AbortController() });
             }
             publish();
             pump();
@@ -142,7 +154,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
                         {items.map((i) => (
                             <li key={i.id} className="space-y-1 px-4 py-2 text-sm">
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate" title={i.name}>{i.name}</span>
+                                    <span className="truncate" title={i.name}>{i.encrypted && <span title="End-to-end encrypted">🔐 </span>}{i.name}</span>
                                     <span className="shrink-0 text-xs text-slate-500">{formatBytes(i.size)}</span>
                                 </div>
                                 {(i.status === 'uploading' || i.status === 'queued') && (

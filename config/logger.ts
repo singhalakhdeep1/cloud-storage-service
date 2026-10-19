@@ -7,6 +7,9 @@ const logsDir = path.join(process.cwd(), 'logs');
 
 const fileFormat = winston.format.combine(winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }), winston.format.errors({ stack: true }), winston.format.splat(), winston.format.json());
 
+/** The uploads log only gets upload and download events (logger.upload / logger.download). */
+const transfersOnly = winston.format((info) => (info.type === 'upload' || info.type === 'download' ? info : false));
+
 const consoleFormat = winston.format.combine(
     winston.format.colorize(),
     winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
@@ -21,7 +24,7 @@ const transports: winston.transport[] = isTest
     : [
           new DailyRotateFile({ filename: path.join(logsDir, 'combined-%DATE%.log'), datePattern: 'YYYY-MM-DD', maxSize: '20m', maxFiles: '14d', format: fileFormat }),
           new DailyRotateFile({ filename: path.join(logsDir, 'error-%DATE%.log'), datePattern: 'YYYY-MM-DD', maxSize: '20m', maxFiles: '30d', level: 'error', format: fileFormat }),
-          new DailyRotateFile({ filename: path.join(logsDir, 'uploads-%DATE%.log'), datePattern: 'YYYY-MM-DD', maxSize: '20m', maxFiles: '14d', format: fileFormat }),
+          new DailyRotateFile({ filename: path.join(logsDir, 'uploads-%DATE%.log'), datePattern: 'YYYY-MM-DD', maxSize: '20m', maxFiles: '14d', format: winston.format.combine(transfersOnly(), fileFormat) }),
       ];
 
 const base = winston.createLogger({ level: process.env.LOG_LEVEL || 'info', silent: isTest && !process.env.LOG_IN_TESTS, format: fileFormat, transports, exitOnError: false });

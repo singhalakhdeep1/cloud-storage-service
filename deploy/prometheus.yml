@@ -1,0 +1,12 @@
+# Scrapes every API instance directly on the internal network (nginx does not expose /metrics).
+# If METRICS_TOKEN is set for the API, add under the job:
+#   authorization:
+#     credentials: <the same token>
+global:
+    scrape_interval: 15s
+
+scrape_configs:
+    - job_name: cloud-storage-api
+      metrics_path: /metrics
+      static_configs:
+          - targets: ["api-1:5000", "api-2:5000", "api-3:5000"]

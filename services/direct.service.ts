@@ -20,6 +20,7 @@ import { isAllowed, resolveMime } from '../utils/mime';
 import virusScanner from '../utils/virusScanner';
 import { shouldEncrypt } from './encryption.service';
 import * as fileService from './file.service';
+import { metrics } from './metrics.service';
 import * as objectStore from './objectStore.service';
 import * as quota from './quota.service';
 import { getStorage } from './storage/registry';
@@ -104,6 +105,7 @@ export async function confirm(user: UserDoc, pendingId: string, req?: Request): 
             const result = await virusScanner.scanStream(stream);
             if (!result.skipped) {
                 if (!result.clean) {
+                    metrics.virusDetected();
                     webhooks.emit('file.infected', user._id, { name: pending.filename, viruses: result.viruses });
                     throw new AppError(`The file was rejected: it contains malware (${result.viruses.join(', ')})`, 422, 'infected');
                 }
@@ -140,6 +142,7 @@ export async function confirm(user: UserDoc, pendingId: string, req?: Request): 
         await provider.delete(pending.key).catch(() => undefined);
         await quota.release(pending.quotaUser ?? user._id, pending.size).catch(() => undefined);
         await PendingUpload.updateOne({ _id: pending._id }, { $set: { status: 'rejected' } });
+        metrics.uploadRejected(e instanceof AppError ? e.code ?? String(e.statusCode) : 'error');
         throw e;
     }
 }

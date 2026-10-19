@@ -5,6 +5,7 @@ import type { FileInfo } from '@sdk/index';
 import { errorMessage, sdk } from '@/lib/api';
 import { categoryIcon, formatBytes, formatDateTime } from '@/lib/format';
 import ActivityPanel from './ActivityPanel';
+import E2EEPanel from './E2EEPanel';
 import ExportPanel from './ExportPanel';
 import ImageTools from './ImageTools';
 import Preview from './Preview';
@@ -53,7 +54,7 @@ export default function FileDrawer({ id, onClose, onChanged }: { id: string; onC
         { id: 'details', label: 'Details', show: true },
         { id: 'versions', label: `Versions (${file.currentVersion})`, show: true },
         { id: 'sharing', label: 'Sharing', show: canAdmin },
-        { id: 'image', label: 'Image tools', show: file.category === 'image' },
+        { id: 'image', label: 'Image tools', show: file.category === 'image' && !file.clientEncryption },
         { id: 'activity', label: 'Activity', show: canAdmin },
         { id: 'export', label: 'Export', show: true },
     ];
@@ -116,7 +117,8 @@ export default function FileDrawer({ id, onClose, onChanged }: { id: string; onC
         <Modal title={file.originalName} onClose={onClose} size="xl">
             <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-slate-600">
                 <span aria-hidden>{categoryIcon[file.category]}</span>
-                <span>{file.mimetype}</span>·<span>{formatBytes(file.size)}</span>·<Badge tone="blue">{file.permission}</Badge>
+                <span>{file.clientEncryption?.mimetype ?? file.mimetype}</span>·<span>{formatBytes(file.clientEncryption?.size ?? file.size)}</span>·<Badge tone="blue">{file.permission}</Badge>
+                {file.clientEncryption && <Badge tone="green">🔐 end-to-end encrypted</Badge>}
                 {file.isEncrypted && <Badge tone="green">🔒 encrypted</Badge>}
                 {file.isPublic && <Badge tone="amber">public</Badge>}
                 {file.virusScanned && <Badge tone="green">scanned</Badge>}
@@ -129,7 +131,7 @@ export default function FileDrawer({ id, onClose, onChanged }: { id: string; onC
 
             {tab === 'details' && (
                 <div className="grid gap-5 md:grid-cols-2">
-                    <Preview file={file} />
+                    {file.clientEncryption ? <E2EEPanel file={file} /> : <Preview file={file} />}
                     <div className="space-y-3">
                         <Field label="Name"><input className="input" value={name} disabled={!canWrite} onChange={(e) => setName(e.target.value)} /></Field>
                         <Field label="Tags" hint="Separate with commas"><input className="input" value={tags} disabled={!canWrite} onChange={(e) => setTags(e.target.value)} /></Field>
@@ -145,7 +147,7 @@ export default function FileDrawer({ id, onClose, onChanged }: { id: string; onC
                             {file.checksum && (<><dt className="text-slate-500">SHA-256</dt><dd className="truncate font-mono text-xs" title={file.checksum}>{file.checksum.slice(0, 16)}…</dd></>)}
                         </dl>
                         <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                            <button className="btn btn-primary" onClick={() => void download()}>⬇️ Download</button>
+                            {!file.clientEncryption && <button className="btn btn-primary" onClick={() => void download()}>⬇️ Download</button>}
                             {canAdmin && <button className="btn btn-secondary" onClick={() => void setVisibility(!file.isPublic)}>{file.isPublic ? 'Make private' : 'Make public'}</button>}
                             {canAdmin && <button className="btn btn-secondary text-red-600" onClick={() => void trash()}>🗑️ Move to trash</button>}
                         </div>
